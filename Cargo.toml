@@ -1,0 +1,17 @@
+[package]
+name = "shredder"
+description = "An experimental Garbage Collector for Rust"
+categories = ["gc", "garbage collector"]
+keywords = ["gc"]
+
+authors = ["Gregor Peach <gregorpeach@gmail.com>"]
+repository = "https://github.com/Others/shredder"
+readme = "README.md"
+license = "MIT"
+
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+lazy_static = "1.4.0"
+parking_lot = "0.10.0"
