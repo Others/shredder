@@ -34,6 +34,8 @@ impl GcDataPtr {
         let dealloc_layout = Layout::for_value(&*self.0);
         let heap_ptr = self.0 as *mut u8;
 
+        // TODO: Implement finalization / call finalizers here
+
         dealloc(heap_ptr, dealloc_layout);
     }
 }
@@ -99,7 +101,9 @@ impl Collector {
 
     pub fn drop_handle(&mut self, handle: GcInternalHandle) {
         self.handles.remove(&handle);
+
         // Dropping a handle might make data unreachable, and trigger a gc
+        // TODO: Consider whether it ever makes sense to GC here
         self.try_collection();
     }
 
@@ -120,6 +124,7 @@ impl Collector {
 
     pub fn dec_held_references(&mut self) {
         self.held_references -= 1;
+        // Dropping a reference might put us in a Gc-able state
         self.try_collection();
     }
 
@@ -185,7 +190,7 @@ impl Collector {
                 }
             }
 
-            println!("In collection, reachable data {:?}", reachable_data);
+            trace!("In collection, reachable data {:?}", reachable_data);
             self.data = reachable_data.into_iter().collect();
 
             for d in unreachable_data {
