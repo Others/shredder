@@ -1,4 +1,3 @@
-#![cfg_attr(feature = "nightly", feature(specialization))]
 // Clippy configuration:
 // I'd like the most pedantic warning level
 #![warn(
@@ -40,6 +39,22 @@ pub fn number_of_active_handles() -> usize {
     COLLECTOR.lock().handle_count()
 }
 
+// TODO: Consider creating a mechanism for configuration "priority"
+pub fn set_gc_trigger_percent(percent: f32) {
+    if percent < -0.0 || percent.is_nan() {
+        panic!(
+            "The trigger percentage cannot be less than zero or NaN! (percent = {})",
+            percent
+        )
+    }
+    COLLECTOR.lock().set_gc_trigger_percent(percent)
+}
+
+#[allow(clippy::must_use_candidate)]
+pub fn try_to_collect() -> bool {
+    COLLECTOR.lock().collect()
+}
+
 // TODO: Add many more tests
 // TODO: Run tests under valgrind
 #[cfg(test)]
@@ -77,6 +92,7 @@ mod test {
         assert_eq!(*gc_ptr.get(), val);
         drop(gc_ptr);
 
+        assert!(try_to_collect());
         assert_eq!(number_of_tracked_allocations(), 0);
         drop(guard);
     }
@@ -95,6 +111,7 @@ mod test {
         assert_eq!(gc_ptr.get().label, "A");
         drop(gc_ptr);
 
+        assert!(try_to_collect());
         assert_eq!(number_of_tracked_allocations(), 0);
         drop(guard);
     }
@@ -119,6 +136,7 @@ mod test {
         drop(gc_ptr_one);
         drop(gc_ptr_two);
 
+        assert!(try_to_collect());
         assert_eq!(number_of_tracked_allocations(), 0);
         drop(guard);
     }

@@ -35,3 +35,13 @@ unsafe impl<T: Scan> Scan for Vec<T> {
         }
     }
 }
+
+// TODO: Add more Scan impls
+// TODO: Add a Scan auto-derive
+
+// TODO: Consider what happens if there are reference cycles (like a Gc -> Rc<A> -> A -> Rc<B> -> B -> Rc<A>)
+// This could lead to an infinite loop during scanning
+// To fix this, we'd have to change how the scan type works, with broadly three options
+// - Keep track of visited items during scanning internally
+// - Return a vector of Scan children instead of GcInternalHandle
+// - Make Rc/Arc not Scan-able

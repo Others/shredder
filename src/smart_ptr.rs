@@ -28,13 +28,14 @@ impl<T: Scan> Gc<T> {
     }
 
     pub(crate) fn internal_handle(&self) -> GcInternalHandle {
-        self.backing_handle
+        self.backing_handle.clone()
     }
 }
 
 impl<T: Scan> Clone for Gc<T> {
+    #[must_use]
     fn clone(&self) -> Self {
-        let new_handle = COLLECTOR.lock().clone_handle(self.backing_handle);
+        let new_handle = COLLECTOR.lock().clone_handle(&self.backing_handle);
 
         Self {
             backing_handle: new_handle,
@@ -43,19 +44,24 @@ impl<T: Scan> Clone for Gc<T> {
     }
 }
 
-// TODO: Validate these impls
-unsafe impl<T: Scan> Send for Gc<T> where T: Send {}
+// Gc<T> only gives you access to &T, so it can be Sync if T is Sync
 unsafe impl<T: Scan> Sync for Gc<T> where T: Sync {}
+// Since we can clone Gc<T>, being able to send a Gc<T> implies possible sharing between threads
+// (Thus for Gc<T> to be send, T must be Send and Sync)
+unsafe impl<T: Scan> Send for Gc<T> where T: Sync + Send {}
 
 impl<T: Scan> Drop for Gc<T> {
     fn drop(&mut self) {
-        COLLECTOR.lock().drop_handle(self.backing_handle);
+        COLLECTOR.lock().drop_handle(&self.backing_handle);
     }
 }
 
+#[derive(Debug)]
 pub struct GcGuard<'a, T: Scan> {
     gc_ptr: &'a Gc<T>,
 }
+
+// TODO: Consider Send/Sync implementations for GcGuard
 
 impl<'a, T: Scan> Drop for GcGuard<'a, T> {
     fn drop(&mut self) {
@@ -66,7 +72,10 @@ impl<'a, T: Scan> Drop for GcGuard<'a, T> {
 impl<'a, T: Scan> Deref for GcGuard<'a, T> {
     type Target = T;
 
+    #[must_use]
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.gc_ptr.direct_ptr }
     }
 }
+
+// TODO: Consider Display implementations for Gc / GcGuard

@@ -12,6 +12,10 @@ use crate::Scan;
 pub struct GcDataPtr(*const dyn Scan);
 
 impl GcDataPtr {
+    // TODO: I'm pretty sure we can drop the 'static bound here thru careful lifetime manipulation
+    // Basically we make T parametric on a lifetime 'a, then track that throughout
+    // The subtly is that we sometimes scan objects after their lifetime ends
+    // I think it's possible to make this work, but needs some examination
     fn allocate<T: Scan + 'static>(v: T) -> (Self, *const T) {
         // This is a straightforward use of alloc/write -- it should be undef free
         let data_ptr = unsafe {
@@ -40,16 +44,25 @@ impl GcDataPtr {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct GcInternalHandle(u64);
 
 pub struct Collector {
+    // TODO: Replace "held_references" with a setup that keeps track of the state of each thread
+    // (Then we could sometimes collect by pausing threads on command)
     held_references: u32,
+
     handle_idx_count: u64,
+
+    // Percent more allocations needed to trigger garbage collection
+    gc_trigger_percent: f32,
+    data_count_at_last_collection: usize,
 
     data: HashSet<GcDataPtr>,
     handles: HashMap<GcInternalHandle, GcDataPtr>,
 }
+
+const DEFAULT_TRIGGER_PERCENT: f32 = 0.75;
 
 unsafe impl Send for Collector {}
 
@@ -71,7 +84,12 @@ impl Collector {
     fn new() -> Self {
         Self {
             held_references: 0,
+
             handle_idx_count: 0,
+
+            gc_trigger_percent: DEFAULT_TRIGGER_PERCENT,
+            data_count_at_last_collection: 0,
+
             data: HashSet::new(),
             handles: HashMap::new(),
         }
@@ -89,28 +107,29 @@ impl Collector {
 
         self.data.insert(gc_data_ptr);
         assert!(!self.handles.contains_key(&handle));
-        self.handles.insert(handle, gc_data_ptr);
+        self.handles.insert(handle.clone(), gc_data_ptr);
 
         let res = (handle, heap_ptr);
 
         // When we allocate, the heuristic for whether we need to GC might change
-        self.try_collection();
+        self.check_then_collect();
 
         res
     }
 
-    pub fn drop_handle(&mut self, handle: GcInternalHandle) {
-        self.handles.remove(&handle);
+    pub fn drop_handle(&mut self, handle: &GcInternalHandle) {
+        self.handles.remove(handle);
 
-        // Dropping a handle might make data unreachable, and trigger a gc
-        // TODO: Consider whether it ever makes sense to GC here
-        self.try_collection();
+        // TODO: Consider if this is useful
+        // This will only trigger a collection if `gc_trigger_percent` == 0.0
+        // (It's in for now since it eases testing)
+        self.check_then_collect();
     }
 
-    pub fn clone_handle(&mut self, handle: GcInternalHandle) -> GcInternalHandle {
+    pub fn clone_handle(&mut self, handle: &GcInternalHandle) -> GcInternalHandle {
         let data = *self
             .handles
-            .get(&handle)
+            .get(handle)
             .expect("Can only copy real handles!");
         let new_handle = self.synthesize_handle();
         self.handles.insert(new_handle.clone(), data);
@@ -125,7 +144,7 @@ impl Collector {
     pub fn dec_held_references(&mut self) {
         self.held_references -= 1;
         // Dropping a reference might put us in a Gc-able state
-        self.try_collection();
+        self.check_then_collect();
     }
 
     pub fn tracked_data_count(&self) -> usize {
@@ -136,69 +155,90 @@ impl Collector {
         self.handles.len()
     }
 
-    pub fn try_collection(&mut self) {
-        // TODO: Add a heuristic smarter than just "we can do a collection"
-        if self.held_references == 0 {
-            let mut roots: HashSet<GcInternalHandle> = self.handles.keys().cloned().collect();
+    pub fn set_gc_trigger_percent(&mut self, new_trigger_percent: f32) {
+        self.gc_trigger_percent = new_trigger_percent;
+    }
 
-            let mut gc_managed_handles = Vec::new();
-            for GcDataPtr(d) in &self.data {
-                let v = unsafe { &**d };
-                v.scan(&mut gc_managed_handles);
+    pub fn check_then_collect(&mut self) -> bool {
+        let percent_more_data = (self.tracked_data_count() - self.data_count_at_last_collection)
+            as f32
+            / self.data_count_at_last_collection as f32;
+
+        if !percent_more_data.is_finite() || percent_more_data >= self.gc_trigger_percent {
+            self.collect()
+        } else {
+            false
+        }
+    }
+
+    pub fn collect(&mut self) -> bool {
+        if self.held_references > 0 {
+            return false;
+        }
+
+        let mut roots: HashSet<GcInternalHandle> = self.handles.keys().cloned().collect();
+
+        let mut gc_managed_handles = Vec::new();
+        for GcDataPtr(d) in &self.data {
+            let v = unsafe { &**d };
+            v.scan(&mut gc_managed_handles);
+        }
+
+        // The roots are those handles not managed by the garbage collector
+        roots.retain(|handle| !gc_managed_handles.contains(handle));
+
+        // Now let's basically do DFS
+        let mut frontier_stack: Vec<GcInternalHandle> = Vec::from_iter(roots.iter().cloned());
+        let mut marked = roots;
+
+        let mut scan_buf: Vec<GcInternalHandle> = Vec::new();
+        while let Some(handle) = frontier_stack.pop() {
+            // Clear the scan buffer
+            scan_buf.clear();
+            // Then populate the scan buffer
+            let data_to_scan = self
+                .handles
+                .get(&handle)
+                .expect("This handle came from this map's keys!")
+                .0;
+            unsafe {
+                (&*data_to_scan).scan(&mut scan_buf);
             }
 
-            // The roots are those handles not managed by the garbage collector
-            roots.retain(|handle| !gc_managed_handles.contains(handle));
-
-            // Now let's basically do DFS
-            let mut frontier_stack: Vec<GcInternalHandle> = Vec::from_iter(roots.iter().cloned());
-            let mut marked = roots;
-
-            let mut scan_buf: Vec<GcInternalHandle> = Vec::new();
-            while let Some(handle) = frontier_stack.pop() {
-                // Clear the scan buffer
-                scan_buf.clear();
-                // Then populate the scan buffer
-                let data_to_scan = self
-                    .handles
-                    .get(&handle)
-                    .expect("This handle came from this map's keys!")
-                    .0;
-                unsafe {
-                    (&*data_to_scan).scan(&mut scan_buf);
-                }
-
-                // Now mark all data
-                for h in &scan_buf {
-                    // If we haven't marked this yet, we need to add it frontier
-                    if !marked.contains(h) {
-                        frontier_stack.push(h.clone());
-                        marked.insert(h.clone());
-                    }
-                }
-            }
-
-            // Now delete all handles that are not reachable
-            self.handles.retain(|k, _| marked.contains(k));
-
-            // Now deallocate all unreachable values
-            let reachable_data: HashSet<GcDataPtr> = self.handles.values().cloned().collect();
-            let mut unreachable_data: Vec<GcDataPtr> = Vec::new();
-            for v in &self.data {
-                if !reachable_data.contains(v) {
-                    unreachable_data.push(v.clone());
-                }
-            }
-
-            trace!("In collection, reachable data {:?}", reachable_data);
-            self.data = reachable_data.into_iter().collect();
-
-            for d in unreachable_data {
-                unsafe {
-                    d.deallocate();
+            // Now mark all data
+            for h in &scan_buf {
+                // If we haven't marked this yet, we need to add it frontier
+                if !marked.contains(h) {
+                    frontier_stack.push(h.clone());
+                    marked.insert(h.clone());
                 }
             }
         }
+
+        // Now delete all handles that are not reachable
+        self.handles.retain(|k, _| marked.contains(k));
+
+        // Now deallocate all unreachable values
+        let reachable_data: HashSet<GcDataPtr> = self.handles.values().cloned().collect();
+        let mut unreachable_data: Vec<GcDataPtr> = Vec::new();
+        for v in &self.data {
+            if !reachable_data.contains(v) {
+                unreachable_data.push(v.clone());
+            }
+        }
+
+        trace!("In collection, reachable data {:?}", reachable_data);
+        self.data = reachable_data.into_iter().collect();
+
+        for d in unreachable_data {
+            unsafe {
+                d.deallocate();
+            }
+        }
+
+        self.data_count_at_last_collection = self.tracked_data_count();
+
+        true
     }
 }
 
