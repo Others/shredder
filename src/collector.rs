@@ -1,15 +1,25 @@
-use std::collections::{HashMap, HashSet};
-
 use std::alloc::{alloc, dealloc, Layout};
+use std::collections::{HashMap, HashSet};
 use std::iter::FromIterator;
+use std::mem::ManuallyDrop;
+use std::panic::{catch_unwind, UnwindSafe};
 use std::ptr;
+use std::sync::mpsc::{self, Sender};
+use std::thread::spawn;
 
+use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
 use crate::Scan;
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct GcDataPtr(*const dyn Scan);
+
+// We need this for the drop thread. By that point we have exclusive access to the data
+// It also, by contract of Scan, cannot have a Drop method that is unsafe in any thead
+unsafe impl Send for GcDataPtr {}
+// Therefore, GcDataPtr is also UnwindSafe in the context we need it to be
+impl UnwindSafe for GcDataPtr {}
 
 impl GcDataPtr {
     // TODO: I'm pretty sure we can drop the 'static bound here thru careful lifetime manipulation
@@ -35,11 +45,20 @@ impl GcDataPtr {
     // This is unsafe, since we must externally guarantee that no-one still holds a pointer to the data
     // (Luckily this is the point of the garbage collector!)
     unsafe fn deallocate(self) {
-        let dealloc_layout = Layout::for_value(&*self.0);
-        let heap_ptr = self.0 as *mut u8;
+        let scan_ptr: *const dyn Scan = self.0;
 
-        // TODO: Implement finalization / call finalizers here
+        // This calls the destructor of the Scan data
+        {
+            // Safe type shift: the contract of this method is that the scan_ptr doesn't alias
+            // + ManuallyDrop is repr(transparent)
+            let droppable_ptr: *mut ManuallyDrop<dyn Scan> =
+                scan_ptr as *mut ManuallyDrop<dyn Scan>;
+            let droppable_ref = &mut *droppable_ptr;
+            ManuallyDrop::drop(droppable_ref);
+        }
 
+        let dealloc_layout = Layout::for_value(&*scan_ptr);
+        let heap_ptr = scan_ptr as *mut u8;
         dealloc(heap_ptr, dealloc_layout);
     }
 }
@@ -50,6 +69,7 @@ pub struct GcInternalHandle(u64);
 pub struct Collector {
     // TODO: Replace "held_references" with a setup that keeps track of the state of each thread
     // (Then we could sometimes collect by pausing threads on command)
+    // TODO: Actually we can do this by not scanning touched objects (the missed handles will be automatically roots)
     held_references: u32,
 
     handle_idx_count: u64,
@@ -57,6 +77,8 @@ pub struct Collector {
     // Percent more allocations needed to trigger garbage collection
     gc_trigger_percent: f32,
     data_count_at_last_collection: usize,
+
+    drop_thread_chan: Sender<GcDataPtr>,
 
     data: HashSet<GcDataPtr>,
     handles: HashMap<GcInternalHandle, GcDataPtr>,
@@ -82,6 +104,22 @@ unsafe impl Send for Collector {}
 
 impl Collector {
     fn new() -> Self {
+        let (sender, receiver) = mpsc::channel::<GcDataPtr>();
+
+        // The drop thread deals with doing all the Drops this collector needs to do
+        spawn(move || {
+            // An Err value means the stream will never recover
+            while let Ok(ptr) = receiver.recv() {
+                // Deallocate / Run Drop
+                let res = catch_unwind(move || unsafe {
+                    ptr.deallocate();
+                });
+                if let Err(e) = res {
+                    error!("Gc background drop failed: {:?}", e);
+                }
+            }
+        });
+
         Self {
             held_references: 0,
 
@@ -89,6 +127,8 @@ impl Collector {
 
             gc_trigger_percent: DEFAULT_TRIGGER_PERCENT,
             data_count_at_last_collection: 0,
+
+            drop_thread_chan: sender,
 
             data: HashSet::new(),
             handles: HashMap::new(),
@@ -120,10 +160,8 @@ impl Collector {
     pub fn drop_handle(&mut self, handle: &GcInternalHandle) {
         self.handles.remove(handle);
 
-        // TODO: Consider if this is useful
-        // This will only trigger a collection if `gc_trigger_percent` == 0.0
-        // (It's in for now since it eases testing)
-        self.check_then_collect();
+        // NOTE: We probably don't want to collect here since it can happen while we are dropping from a previous collection
+        // self.check_then_collect();
     }
 
     pub fn clone_handle(&mut self, handle: &GcInternalHandle) -> GcInternalHandle {
@@ -135,6 +173,10 @@ impl Collector {
         self.handles.insert(new_handle.clone(), data);
 
         new_handle
+    }
+
+    pub fn validate_handle(&self, handle: &GcInternalHandle) -> bool {
+        self.handles.contains_key(handle)
     }
 
     pub fn inc_held_references(&mut self) {
@@ -231,9 +273,9 @@ impl Collector {
         self.data = reachable_data.into_iter().collect();
 
         for d in unreachable_data {
-            unsafe {
-                d.deallocate();
-            }
+            self.drop_thread_chan
+                .send(d)
+                .expect("drop thread should be infallable");
         }
 
         self.data_count_at_last_collection = self.tracked_data_count();
@@ -242,6 +284,4 @@ impl Collector {
     }
 }
 
-lazy_static! {
-    pub static ref COLLECTOR: Mutex<Collector> = Mutex::new(Collector::new());
-}
+pub static COLLECTOR: Lazy<Mutex<Collector>> = Lazy::new(|| Mutex::new(Collector::new()));
