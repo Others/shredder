@@ -4,7 +4,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
-use crate::collector::{GcInternalHandle, COLLECTOR};
+use crate::collector::{GcInternalHandle, LockWithReadGuard, COLLECTOR};
 use crate::Scan;
 
 #[derive(Debug)]
@@ -18,7 +18,7 @@ impl<T: Scan> Gc<T> {
     where
         T: 'static,
     {
-        let (handle, ptr) = COLLECTOR.lock().track_data(v);
+        let (handle, ptr) = COLLECTOR.track_data(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
@@ -27,14 +27,11 @@ impl<T: Scan> Gc<T> {
 
     #[must_use]
     pub fn get(&self) -> GcGuard<T> {
-        let mut locked_collector = COLLECTOR.lock();
-        if !locked_collector.validate_handle(&self.backing_handle) {
-            drop(locked_collector);
-            panic!("Tried to access Gc data, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
+        let warrant = COLLECTOR.get_data_warrant(&self.backing_handle);
+        GcGuard {
+            gc_ptr: self,
+            warrant,
         }
-
-        locked_collector.inc_held_references();
-        GcGuard { gc_ptr: self }
     }
 
     pub(crate) fn internal_handle(&self) -> GcInternalHandle {
@@ -45,13 +42,7 @@ impl<T: Scan> Gc<T> {
 impl<T: Scan> Clone for Gc<T> {
     #[must_use]
     fn clone(&self) -> Self {
-        let mut locked_collector = COLLECTOR.lock();
-        if !locked_collector.validate_handle(&self.backing_handle) {
-            drop(locked_collector);
-            panic!("Tried to clone a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
-        }
-
-        let new_handle = locked_collector.clone_handle(&self.backing_handle);
+        let new_handle = COLLECTOR.clone_handle(&self.backing_handle);
 
         Self {
             backing_handle: new_handle,
@@ -69,7 +60,7 @@ unsafe impl<T: Scan> Send for Gc<T> where T: Sync + Send {}
 impl<T: Scan> Drop for Gc<T> {
     fn drop(&mut self) {
         // This may trigger during Gc-drop, but it'll do nothing and everything will be fine
-        COLLECTOR.lock().drop_handle(&self.backing_handle);
+        COLLECTOR.drop_handle(&self.backing_handle);
     }
 }
 
@@ -193,21 +184,10 @@ where
 #[derive(Debug)]
 pub struct GcGuard<'a, T: Scan> {
     gc_ptr: &'a Gc<T>,
+    warrant: LockWithReadGuard<'a>,
 }
 
 // TODO: Consider Send/Sync implementations for GcGuard
-
-impl<'a, T: Scan> Drop for GcGuard<'a, T> {
-    fn drop(&mut self) {
-        let mut locked_collector = COLLECTOR.lock();
-        if !locked_collector.validate_handle(&self.gc_ptr.backing_handle) {
-            drop(locked_collector);
-            panic!("Tried to drop a guard handle, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
-        }
-
-        locked_collector.dec_held_references();
-    }
-}
 
 impl<'a, T: Scan> Deref for GcGuard<'a, T> {
     type Target = T;

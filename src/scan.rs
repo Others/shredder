@@ -1,21 +1,26 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::hash::BuildHasher;
 
 use crate::collector::GcInternalHandle;
 use crate::Gc;
-use std::hash::BuildHasher;
 
-// TODO: Expand this to explain the UScan/Scan business
+// TODO: Add non-'static data as an option
+//  Enhance Scan with distinction between options
+//  Add flag, so we don't run destructors for non-'static data
+
+// TODO: Expand this to explain the Scan/SendScan business
 // Scan is unsafe, because all Scan types must satisfy the following requirements:
 // 1) If no one else has a reference to a T, it's okay for the "scan" method to be called from any thread
 // 2) T can be dropped from any thread safely
-// If T is send, T satisfies these requirements
+// If T is send + 'static, T satisfies these requirements
 pub unsafe trait Scan {
-    // TODO: Consider if a HashSet would be a better fit for out, instead of a Vec
+    // Note: This could technically be a HashSet, but handles typically have one owner
+    // (So using a HashSet is just extra overhead)
     fn scan(&self, out: &mut Vec<GcInternalHandle>);
 }
 
-pub trait SendScan: Send {
+pub trait SendScan: Send + 'static {
     fn scan(&self, out: &mut Vec<GcInternalHandle>);
 }
 
@@ -101,7 +106,7 @@ unsafe impl<T: Scan> Scan for RefCell<T> {
 
 // TODO: Add a Scan auto-derive
 
-// TODO: Consider what happens if there are reference cycles (like a Gc -> Rc<A> -> A -> Rc<B> -> B -> Rc<A>)
+// TODO: Consider what happens if there are reference cycles (like a Gc -> Arc<A> -> A -> Arc<B> -> B -> Arc<A>)
 // This could lead to an infinite loop during scanning
 // To fix this, we'd have to change how the scan type works, with broadly three options
 // - Keep track of visited items during scanning internally

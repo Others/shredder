@@ -4,11 +4,13 @@ use std::iter::FromIterator;
 use std::mem::ManuallyDrop;
 use std::panic::{catch_unwind, UnwindSafe};
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::thread::spawn;
 
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::Scan;
 
@@ -22,10 +24,8 @@ unsafe impl Send for GcDataPtr {}
 impl UnwindSafe for GcDataPtr {}
 
 impl GcDataPtr {
-    // TODO: I'm pretty sure we can drop the 'static bound here thru careful lifetime manipulation
-    // Basically we make T parametric on a lifetime 'a, then track that throughout
-    // The subtly is that we sometimes scan objects after their lifetime ends
-    // I think it's possible to make this work, but needs some examination
+    // TODO: Consider how to remove the 'static bound here
+    //       Because we can Scan after data goes out of scope, this is very non-trivial
     fn allocate<T: Scan + 'static>(v: T) -> (Self, *const T) {
         // This is a straightforward use of alloc/write -- it should be undef free
         let data_ptr = unsafe {
@@ -66,28 +66,30 @@ impl GcDataPtr {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct GcInternalHandle(u64);
 
-pub struct Collector {
-    // TODO: Replace "held_references" with a setup that keeps track of the state of each thread
-    // (Then we could sometimes collect by pausing threads on command)
-    // TODO: Actually we can do this by not scanning touched objects (the missed handles will be automatically roots)
-    held_references: u32,
-
-    handle_idx_count: u64,
-
+struct TriggerData {
     // Percent more allocations needed to trigger garbage collection
     gc_trigger_percent: f32,
     data_count_at_last_collection: usize,
+}
 
-    drop_thread_chan: Sender<GcDataPtr>,
+struct TrackedGcData {
+    data: HashMap<GcDataPtr, Arc<RwLock<()>>>,
+    handles: HashMap<GcInternalHandle, (GcDataPtr, Arc<RwLock<()>>)>,
+}
 
-    data: HashSet<GcDataPtr>,
-    handles: HashMap<GcInternalHandle, GcDataPtr>,
+pub struct Collector {
+    handle_idx_count: AtomicU64,
+    trigger_data: Mutex<TriggerData>,
+    drop_thread_chan: Mutex<Sender<GcDataPtr>>,
+    async_gc_chan: Mutex<Sender<()>>,
+    gc_data: Mutex<TrackedGcData>,
 }
 
 const DEFAULT_TRIGGER_PERCENT: f32 = 0.75;
 
 unsafe impl Send for Collector {}
 
+// TODO: Update overall design document
 // Overall design
 // Stop the world when we get get everyone out of the GC
 //   (AKA, no-one has a reference to a GC'd object)
@@ -103,185 +105,291 @@ unsafe impl Send for Collector {}
 // With a stopped world + roots, then we can simply mark and sweep
 
 impl Collector {
-    fn new() -> Self {
-        let (sender, receiver) = mpsc::channel::<GcDataPtr>();
+    fn new() -> Arc<Self> {
+        let (drop_sender, drop_receiver) = mpsc::channel::<GcDataPtr>();
 
         // The drop thread deals with doing all the Drops this collector needs to do
         spawn(move || {
             // An Err value means the stream will never recover
-            while let Ok(ptr) = receiver.recv() {
+            while let Ok(ptr) = drop_receiver.recv() {
                 // Deallocate / Run Drop
                 let res = catch_unwind(move || unsafe {
                     ptr.deallocate();
                 });
                 if let Err(e) = res {
-                    error!("Gc background drop failed: {:?}", e);
+                    // TODO: Consider log vs. eprintln
+                    //   error!("Gc background drop failed: {:?}", e);
+                    eprintln!("Gc background drop failed: {:?}", e);
                 }
             }
         });
 
-        Self {
-            held_references: 0,
+        let (async_gc_trigger, async_gc_reciever) = mpsc::channel::<()>();
 
-            handle_idx_count: 0,
+        let res = Arc::new(Self {
+            handle_idx_count: AtomicU64::new(1),
+            trigger_data: Mutex::new(TriggerData {
+                gc_trigger_percent: DEFAULT_TRIGGER_PERCENT,
+                data_count_at_last_collection: 0,
+            }),
+            async_gc_chan: Mutex::new(async_gc_trigger),
+            drop_thread_chan: Mutex::new(drop_sender),
+            gc_data: Mutex::new(TrackedGcData {
+                data: HashMap::new(),
+                handles: HashMap::new(),
+            }),
+        });
 
-            gc_trigger_percent: DEFAULT_TRIGGER_PERCENT,
-            data_count_at_last_collection: 0,
-
-            drop_thread_chan: sender,
-
-            data: HashSet::new(),
-            handles: HashMap::new(),
-        }
-    }
-
-    fn synthesize_handle(&mut self) -> GcInternalHandle {
-        let handle = GcInternalHandle(self.handle_idx_count);
-        self.handle_idx_count += 1;
-        handle
-    }
-
-    pub fn track_data<T: Scan + 'static>(&mut self, data: T) -> (GcInternalHandle, *const T) {
-        let (gc_data_ptr, heap_ptr) = GcDataPtr::allocate(data);
-        let handle = self.synthesize_handle();
-
-        self.data.insert(gc_data_ptr);
-        assert!(!self.handles.contains_key(&handle));
-        self.handles.insert(handle.clone(), gc_data_ptr);
-
-        let res = (handle, heap_ptr);
-
-        // When we allocate, the heuristic for whether we need to GC might change
-        self.check_then_collect();
+        // The async Gc thread deals with background Gc'ing
+        let async_collector_ref = Arc::downgrade(&res);
+        spawn(move || {
+            // An Err value means the stream will never recover
+            while let Ok(_) = async_gc_reciever.recv() {
+                if let Some(collector) = async_collector_ref.upgrade() {
+                    collector.check_then_collect();
+                }
+            }
+        });
 
         res
     }
 
-    pub fn drop_handle(&mut self, handle: &GcInternalHandle) {
-        self.handles.remove(handle);
-
-        // NOTE: We probably don't want to collect here since it can happen while we are dropping from a previous collection
-        // self.check_then_collect();
+    fn synthesize_handle(&self) -> GcInternalHandle {
+        let n = self.handle_idx_count.fetch_add(1, Ordering::SeqCst);
+        GcInternalHandle(n)
     }
 
-    pub fn clone_handle(&mut self, handle: &GcInternalHandle) -> GcInternalHandle {
-        let data = *self
+    pub fn track_data<T: Scan + 'static>(&self, data: T) -> (GcInternalHandle, *const T) {
+        let (gc_data_ptr, heap_ptr) = GcDataPtr::allocate(data);
+        let handle = self.synthesize_handle();
+        let data_lock = Arc::new(RwLock::new(()));
+
+        let mut gc_data = self.gc_data.lock();
+        gc_data.data.insert(gc_data_ptr, data_lock.clone());
+        assert!(!gc_data.handles.contains_key(&handle));
+        gc_data
+            .handles
+            .insert(handle.clone(), (gc_data_ptr, data_lock));
+        drop(gc_data);
+
+        let res = (handle, heap_ptr);
+
+        // When we allocate, the heuristic for whether we need to GC might change
+        self.async_gc_chan
+            .lock()
+            .send(())
+            .expect("We should always be able to");
+
+        res
+    }
+
+    pub fn drop_handle(&self, handle: &GcInternalHandle) {
+        let mut gc_data = self.gc_data.lock();
+
+        gc_data.handles.remove(handle);
+
+        // NOTE: We probably don't want to collect here since it can happen while we are dropping from a previous collection
+        // self.async_gc_chan.lock().send(());
+    }
+
+    pub fn clone_handle(&self, handle: &GcInternalHandle) -> GcInternalHandle {
+        // Note: On panic, the lock is freed normally -- which is what we want
+        let mut gc_data = self.gc_data.lock();
+
+        let (data_ptr, data_lock) = gc_data
             .handles
             .get(handle)
-            .expect("Can only copy real handles!");
+            .expect("Tried to clone a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
+
+        let data_ptr = *data_ptr;
+        let data_lock = data_lock.clone();
+
         let new_handle = self.synthesize_handle();
-        self.handles.insert(new_handle.clone(), data);
+        gc_data
+            .handles
+            .insert(new_handle.clone(), (data_ptr, data_lock));
 
         new_handle
     }
 
-    pub fn validate_handle(&self, handle: &GcInternalHandle) -> bool {
-        self.handles.contains_key(handle)
-    }
+    pub fn get_data_warrant(&self, handle: &GcInternalHandle) -> LockWithReadGuard {
+        // Note: On panic, the lock is freed normally -- which is what we want
+        let gc_data = self.gc_data.lock();
 
-    pub fn inc_held_references(&mut self) {
-        self.held_references += 1;
-    }
+        let (_, data_lock) = gc_data.handles.get(handle)
+            .expect("Tried to access Gc data, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
 
-    pub fn dec_held_references(&mut self) {
-        self.held_references -= 1;
-        // Dropping a reference might put us in a Gc-able state
-        self.check_then_collect();
+        LockWithReadGuard::new(data_lock.clone())
     }
 
     pub fn tracked_data_count(&self) -> usize {
-        self.data.len()
+        let gc_data = self.gc_data.lock();
+        gc_data.data.len()
     }
 
     pub fn handle_count(&self) -> usize {
-        self.handles.len()
+        let gc_data = self.gc_data.lock();
+        gc_data.handles.len()
     }
 
-    pub fn set_gc_trigger_percent(&mut self, new_trigger_percent: f32) {
-        self.gc_trigger_percent = new_trigger_percent;
+    pub fn set_gc_trigger_percent(&self, new_trigger_percent: f32) {
+        self.trigger_data.lock().gc_trigger_percent = new_trigger_percent;
     }
 
-    pub fn check_then_collect(&mut self) -> bool {
-        let percent_more_data = (self.tracked_data_count() - self.data_count_at_last_collection)
-            as f32
-            / self.data_count_at_last_collection as f32;
+    pub fn check_then_collect(&self) -> bool {
+        let trigger_data = self.trigger_data.lock();
+        let gc_data = self.gc_data.lock();
 
-        if !percent_more_data.is_finite() || percent_more_data >= self.gc_trigger_percent {
-            self.collect()
+        let tracked_data_count = gc_data.data.len();
+        let new_data_count = tracked_data_count - trigger_data.data_count_at_last_collection;
+        let percent_more_data =
+            new_data_count as f32 / trigger_data.data_count_at_last_collection as f32;
+
+        if !percent_more_data.is_finite() || percent_more_data >= trigger_data.gc_trigger_percent {
+            self.do_collect(trigger_data, gc_data)
         } else {
             false
         }
     }
 
-    pub fn collect(&mut self) -> bool {
-        if self.held_references > 0 {
-            return false;
+    pub fn collect(&self) -> bool {
+        let trigger_data = self.trigger_data.lock();
+        let gc_data = self.gc_data.lock();
+        self.do_collect(trigger_data, gc_data)
+    }
+
+    fn do_collect(
+        &self,
+        mut trigger_data: MutexGuard<TriggerData>,
+        gc_data: MutexGuard<TrackedGcData>,
+    ) -> bool {
+        trace!("Beginning collection");
+        // We want to get a snapshot of what the handles and the data look like
+        let data_snapshot: HashMap<GcDataPtr, Arc<RwLock<()>>> = gc_data.data.clone();
+        let handle_snapshot: HashMap<GcInternalHandle, (GcDataPtr, Arc<RwLock<()>>)> =
+            gc_data.handles.clone();
+
+        let mut scanables: Vec<(GcInternalHandle, &GcDataPtr, RwLockWriteGuard<()>)> = Vec::new();
+        for (handle, (data_ptr, data_lock)) in &handle_snapshot {
+            if let Some(guard) = data_lock.try_write() {
+                scanables.push((handle.clone(), data_ptr, guard));
+            }
         }
+        drop(gc_data);
 
-        let mut roots: HashSet<GcInternalHandle> = self.handles.keys().cloned().collect();
+        // Note: We now are operating on an old copy of the data. However, that's okay
+        // Intuition: If data was unreachable then, it's unreachable now
 
-        let mut gc_managed_handles = Vec::new();
-        for GcDataPtr(d) in &self.data {
-            let v = unsafe { &**d };
-            v.scan(&mut gc_managed_handles);
+        // Now do scan, since we'll need that information
+        let mut roots: HashSet<GcInternalHandle> = handle_snapshot.keys().cloned().collect();
+        let mut scan_results: HashMap<GcInternalHandle, Vec<GcInternalHandle>> = HashMap::new();
+        for (handle, &data_ptr, _) in &scanables {
+            let mut results = Vec::new();
+            let to_scan = unsafe { &*data_ptr.0 };
+            to_scan.scan(&mut results);
+
+            for h in &results {
+                roots.remove(h);
+            }
+
+            scan_results.insert(handle.clone(), results);
         }
-
-        // The roots are those handles not managed by the garbage collector
-        roots.retain(|handle| !gc_managed_handles.contains(handle));
+        drop(scanables);
 
         // Now let's basically do DFS
         let mut frontier_stack: Vec<GcInternalHandle> = Vec::from_iter(roots.iter().cloned());
-        let mut marked = roots;
+        let mut marked_data: HashSet<GcDataPtr> = roots
+            .iter()
+            .map(|k| {
+                handle_snapshot
+                    .get(k)
+                    .expect("We got the roots from this snapshot!")
+                    .0
+            })
+            .collect();
+        let mut marked_handles = roots;
 
-        let mut scan_buf: Vec<GcInternalHandle> = Vec::new();
+        let empty_vec = Vec::new();
         while let Some(handle) = frontier_stack.pop() {
-            // Clear the scan buffer
-            scan_buf.clear();
-            // Then populate the scan buffer
-            let data_to_scan = self
-                .handles
-                .get(&handle)
-                .expect("This handle came from this map's keys!")
-                .0;
-            unsafe {
-                (&*data_to_scan).scan(&mut scan_buf);
-            }
-
             // Now mark all data
-            for h in &scan_buf {
+            for h in scan_results.get(&handle).unwrap_or(&empty_vec) {
                 // If we haven't marked this yet, we need to add it frontier
-                if !marked.contains(h) {
+                if !marked_handles.contains(h) {
                     frontier_stack.push(h.clone());
-                    marked.insert(h.clone());
+
+                    let v = handle_snapshot
+                        .get(h)
+                        .expect("We got the handles from this snapshot!")
+                        .0;
+                    marked_data.insert(v);
+                    marked_handles.insert(h.clone());
                 }
             }
         }
 
-        // Now delete all handles that are not reachable
-        self.handles.retain(|k, _| marked.contains(k));
+        let unreachable_handles: HashSet<GcInternalHandle> = handle_snapshot
+            .keys()
+            .filter(|&v| !marked_handles.contains(v))
+            .cloned()
+            .collect();
 
-        // Now deallocate all unreachable values
-        let reachable_data: HashSet<GcDataPtr> = self.handles.values().cloned().collect();
-        let mut unreachable_data: Vec<GcDataPtr> = Vec::new();
-        for v in &self.data {
-            if !reachable_data.contains(v) {
-                unreachable_data.push(v.clone());
+        let unreachable_data: HashSet<GcDataPtr> = data_snapshot
+            .keys()
+            .filter(|&v| !marked_data.contains(v))
+            .cloned()
+            .collect();
+
+        let mut gc_data = self.gc_data.lock();
+        for h in &unreachable_handles {
+            gc_data.handles.remove(h);
+        }
+
+        let drop_thread_chan = self.drop_thread_chan.lock();
+        for d in &unreachable_data {
+            if let Some((ptr, _)) = gc_data.data.remove_entry(d) {
+                drop_thread_chan
+                    .send(ptr)
+                    .expect("drop thread should be infallable");
             }
         }
+        drop(gc_data);
 
-        trace!("In collection, reachable data {:?}", reachable_data);
-        self.data = reachable_data.into_iter().collect();
+        trigger_data.data_count_at_last_collection = self.tracked_data_count();
 
-        for d in unreachable_data {
-            self.drop_thread_chan
-                .send(d)
-                .expect("drop thread should be infallable");
-        }
-
-        self.data_count_at_last_collection = self.tracked_data_count();
+        trace!("Collection finished");
 
         true
     }
 }
 
-pub static COLLECTOR: Lazy<Mutex<Collector>> = Lazy::new(|| Mutex::new(Collector::new()));
+pub static COLLECTOR: Lazy<Arc<Collector>> = Lazy::new(Collector::new);
+
+// A way to pass around locks with associated guards
+// TODO: Double check safety here
+#[derive(Debug)]
+pub struct LockWithReadGuard<'a> {
+    lock: ManuallyDrop<Arc<RwLock<()>>>,
+    // The guard's lifetime is tied to the lifetime of the struct
+    guard: ManuallyDrop<RwLockReadGuard<'a, ()>>,
+}
+
+impl LockWithReadGuard<'_> {
+    pub fn new<'a>(lock: Arc<RwLock<()>>) -> LockWithReadGuard<'a> {
+        let guard = unsafe { std::mem::transmute(lock.read()) };
+
+        LockWithReadGuard {
+            lock: ManuallyDrop::new(lock),
+            guard: ManuallyDrop::new(guard),
+        }
+    }
+}
+
+impl Drop for LockWithReadGuard<'_> {
+    fn drop(&mut self) {
+        // Drop guard which references the lock, then the lock itself
+        unsafe {
+            ManuallyDrop::drop(&mut self.guard);
+            ManuallyDrop::drop(&mut self.lock);
+        }
+    }
+}

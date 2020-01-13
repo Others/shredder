@@ -28,12 +28,12 @@ pub use smart_ptr::{Gc, GcGuard};
 
 #[must_use]
 pub fn number_of_tracked_allocations() -> usize {
-    COLLECTOR.lock().tracked_data_count()
+    COLLECTOR.tracked_data_count()
 }
 
 #[must_use]
 pub fn number_of_active_handles() -> usize {
-    COLLECTOR.lock().handle_count()
+    COLLECTOR.handle_count()
 }
 
 // TODO: Consider creating a mechanism for configuration "priority"
@@ -44,12 +44,12 @@ pub fn set_gc_trigger_percent(percent: f32) {
             percent
         )
     }
-    COLLECTOR.lock().set_gc_trigger_percent(percent)
+    COLLECTOR.set_gc_trigger_percent(percent)
 }
 
 #[allow(clippy::must_use_candidate)]
 pub fn try_to_collect() -> bool {
-    COLLECTOR.lock().collect()
+    COLLECTOR.collect()
 }
 
 // TODO: Add Gc cleanup+shutdown function
