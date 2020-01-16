@@ -17,64 +17,65 @@ use crate::Gc;
 pub unsafe trait Scan {
     // Note: This could technically be a HashSet, but handles typically have one owner
     // (So using a HashSet is just extra overhead)
-    fn scan(&self, out: &mut Vec<GcInternalHandle>);
+    // Unsafe, because safe code cannot have `GcInternalHandle`s
+    unsafe fn scan(&self, out: &mut Vec<GcInternalHandle>);
 }
 
 pub trait SendScan: Send + 'static {
-    fn scan(&self, out: &mut Vec<GcInternalHandle>);
+    unsafe fn scan(&self, out: &mut Vec<GcInternalHandle>);
 }
 
 unsafe impl<T: SendScan> Scan for T {
-    fn scan(&self, out: &mut Vec<GcInternalHandle>) {
+    unsafe fn scan(&self, out: &mut Vec<GcInternalHandle>) {
         SendScan::scan(self, out)
     }
 }
 
 // Fundamental to the Scan system is that Gc<T> yields its underlying handle
 unsafe impl<T: Scan> Scan for Gc<T> {
-    fn scan(&self, out: &mut Vec<GcInternalHandle>) {
+    unsafe fn scan(&self, out: &mut Vec<GcInternalHandle>) {
         out.push(self.internal_handle())
     }
 }
 
 // Primitives do not hold any Gc<T>s
 impl SendScan for usize {
-    fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
+    unsafe fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
 }
 
 impl SendScan for isize {
-    fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
+    unsafe fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
 }
 
 impl SendScan for u32 {
-    fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
+    unsafe fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
 }
 
 impl SendScan for i32 {
-    fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
+    unsafe fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
 }
 
 impl SendScan for f32 {
-    fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
+    unsafe fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
 }
 
 impl SendScan for u64 {
-    fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
+    unsafe fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
 }
 
 impl SendScan for i64 {
-    fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
+    unsafe fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
 }
 
 impl SendScan for f64 {
-    fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
+    unsafe fn scan(&self, _: &mut Vec<GcInternalHandle>) {}
 }
 
 // TODO: Add more Scan impls
 
 // For collections that own their elements, Collection<T>: Scan iff T: Scan
 unsafe impl<T: Scan> Scan for Vec<T> {
-    fn scan(&self, out: &mut Vec<GcInternalHandle>) {
+    unsafe fn scan(&self, out: &mut Vec<GcInternalHandle>) {
         for v in self {
             v.scan(out);
         }
@@ -82,7 +83,7 @@ unsafe impl<T: Scan> Scan for Vec<T> {
 }
 
 unsafe impl<T: Scan, S: BuildHasher> Scan for HashSet<T, S> {
-    fn scan(&self, out: &mut Vec<GcInternalHandle>) {
+    unsafe fn scan(&self, out: &mut Vec<GcInternalHandle>) {
         for v in self {
             v.scan(out);
         }
@@ -90,7 +91,7 @@ unsafe impl<T: Scan, S: BuildHasher> Scan for HashSet<T, S> {
 }
 
 unsafe impl<K: Scan, V: Scan, S: BuildHasher> Scan for HashMap<K, V, S> {
-    fn scan(&self, out: &mut Vec<GcInternalHandle>) {
+    unsafe fn scan(&self, out: &mut Vec<GcInternalHandle>) {
         for (k, v) in self {
             k.scan(out);
             v.scan(out);
@@ -99,8 +100,10 @@ unsafe impl<K: Scan, V: Scan, S: BuildHasher> Scan for HashMap<K, V, S> {
 }
 
 unsafe impl<T: Scan> Scan for RefCell<T> {
-    fn scan(&self, out: &mut Vec<GcInternalHandle>) {
-        self.borrow().scan(out);
+    unsafe fn scan(&self, out: &mut Vec<GcInternalHandle>) {
+        if let Ok(reference) = self.try_borrow() {
+            reference.scan(out);
+        }
     }
 }
 

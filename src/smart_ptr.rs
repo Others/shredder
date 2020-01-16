@@ -4,7 +4,8 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
-use crate::collector::{GcInternalHandle, LockWithReadGuard, COLLECTOR};
+use crate::collector::{GcInternalHandle, COLLECTOR};
+use crate::lockout::Warrant;
 use crate::Scan;
 
 #[derive(Debug)]
@@ -184,7 +185,7 @@ where
 #[derive(Debug)]
 pub struct GcGuard<'a, T: Scan> {
     gc_ptr: &'a Gc<T>,
-    warrant: LockWithReadGuard<'a>,
+    warrant: Warrant,
 }
 
 // TODO: Consider Send/Sync implementations for GcGuard

@@ -17,6 +17,7 @@
 extern crate log;
 
 mod collector;
+mod lockout;
 mod scan;
 mod smart_ptr;
 

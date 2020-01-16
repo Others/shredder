@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::thread::spawn;
 
 use once_cell::sync::Lazy;
-use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
 
+use crate::lockout::{ExclusiveWarrant, Lockout, Warrant};
 use crate::Scan;
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
@@ -22,6 +23,8 @@ pub struct GcDataPtr(*const dyn Scan);
 unsafe impl Send for GcDataPtr {}
 // Therefore, GcDataPtr is also UnwindSafe in the context we need it to be
 impl UnwindSafe for GcDataPtr {}
+// We use the lockout to ensure that `GcDataPtr`s are not shared
+unsafe impl Sync for GcDataPtr {}
 
 impl GcDataPtr {
     // TODO: Consider how to remove the 'static bound here
@@ -73,8 +76,8 @@ struct TriggerData {
 }
 
 struct TrackedGcData {
-    data: HashMap<GcDataPtr, Arc<RwLock<()>>>,
-    handles: HashMap<GcInternalHandle, (GcDataPtr, Arc<RwLock<()>>)>,
+    data: HashMap<GcDataPtr, Arc<Lockout>>,
+    handles: HashMap<GcInternalHandle, (GcDataPtr, Arc<Lockout>)>,
 }
 
 pub struct Collector {
@@ -82,12 +85,10 @@ pub struct Collector {
     trigger_data: Mutex<TriggerData>,
     drop_thread_chan: Mutex<Sender<GcDataPtr>>,
     async_gc_chan: Mutex<Sender<()>>,
-    gc_data: Mutex<TrackedGcData>,
+    gc_data: RwLock<TrackedGcData>,
 }
 
 const DEFAULT_TRIGGER_PERCENT: f32 = 0.75;
-
-unsafe impl Send for Collector {}
 
 // TODO: Update overall design document
 // Overall design
@@ -134,7 +135,7 @@ impl Collector {
             }),
             async_gc_chan: Mutex::new(async_gc_trigger),
             drop_thread_chan: Mutex::new(drop_sender),
-            gc_data: Mutex::new(TrackedGcData {
+            gc_data: RwLock::new(TrackedGcData {
                 data: HashMap::new(),
                 handles: HashMap::new(),
             }),
@@ -162,14 +163,14 @@ impl Collector {
     pub fn track_data<T: Scan + 'static>(&self, data: T) -> (GcInternalHandle, *const T) {
         let (gc_data_ptr, heap_ptr) = GcDataPtr::allocate(data);
         let handle = self.synthesize_handle();
-        let data_lock = Arc::new(RwLock::new(()));
+        let lockout = Lockout::new();
 
-        let mut gc_data = self.gc_data.lock();
-        gc_data.data.insert(gc_data_ptr, data_lock.clone());
+        let mut gc_data = self.gc_data.write();
+        gc_data.data.insert(gc_data_ptr, lockout.clone());
         assert!(!gc_data.handles.contains_key(&handle));
         gc_data
             .handles
-            .insert(handle.clone(), (gc_data_ptr, data_lock));
+            .insert(handle.clone(), (gc_data_ptr, lockout));
         drop(gc_data);
 
         let res = (handle, heap_ptr);
@@ -184,7 +185,7 @@ impl Collector {
     }
 
     pub fn drop_handle(&self, handle: &GcInternalHandle) {
-        let mut gc_data = self.gc_data.lock();
+        let mut gc_data = self.gc_data.write();
 
         gc_data.handles.remove(handle);
 
@@ -194,7 +195,7 @@ impl Collector {
 
     pub fn clone_handle(&self, handle: &GcInternalHandle) -> GcInternalHandle {
         // Note: On panic, the lock is freed normally -- which is what we want
-        let mut gc_data = self.gc_data.lock();
+        let mut gc_data = self.gc_data.write();
 
         let (data_ptr, data_lock) = gc_data
             .handles
@@ -212,23 +213,23 @@ impl Collector {
         new_handle
     }
 
-    pub fn get_data_warrant(&self, handle: &GcInternalHandle) -> LockWithReadGuard {
+    pub fn get_data_warrant(&self, handle: &GcInternalHandle) -> Warrant {
         // Note: On panic, the lock is freed normally -- which is what we want
-        let gc_data = self.gc_data.lock();
+        let gc_data = self.gc_data.read();
 
-        let (_, data_lock) = gc_data.handles.get(handle)
+        let (_, lockout) = gc_data.handles.get(handle)
             .expect("Tried to access Gc data, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
 
-        LockWithReadGuard::new(data_lock.clone())
+        Lockout::get_warrant(lockout)
     }
 
     pub fn tracked_data_count(&self) -> usize {
-        let gc_data = self.gc_data.lock();
+        let gc_data = self.gc_data.read();
         gc_data.data.len()
     }
 
     pub fn handle_count(&self) -> usize {
-        let gc_data = self.gc_data.lock();
+        let gc_data = self.gc_data.read();
         gc_data.handles.len()
     }
 
@@ -238,7 +239,7 @@ impl Collector {
 
     pub fn check_then_collect(&self) -> bool {
         let trigger_data = self.trigger_data.lock();
-        let gc_data = self.gc_data.lock();
+        let gc_data = self.gc_data.read();
 
         let tracked_data_count = gc_data.data.len();
         let new_data_count = tracked_data_count - trigger_data.data_count_at_last_collection;
@@ -254,24 +255,24 @@ impl Collector {
 
     pub fn collect(&self) -> bool {
         let trigger_data = self.trigger_data.lock();
-        let gc_data = self.gc_data.lock();
+        let gc_data = self.gc_data.read();
         self.do_collect(trigger_data, gc_data)
     }
 
     fn do_collect(
         &self,
         mut trigger_data: MutexGuard<TriggerData>,
-        gc_data: MutexGuard<TrackedGcData>,
+        gc_data: RwLockReadGuard<TrackedGcData>,
     ) -> bool {
         trace!("Beginning collection");
         // We want to get a snapshot of what the handles and the data look like
-        let data_snapshot: HashMap<GcDataPtr, Arc<RwLock<()>>> = gc_data.data.clone();
-        let handle_snapshot: HashMap<GcInternalHandle, (GcDataPtr, Arc<RwLock<()>>)> =
+        let data_snapshot: HashMap<GcDataPtr, Arc<Lockout>> = gc_data.data.clone();
+        let handle_snapshot: HashMap<GcInternalHandle, (GcDataPtr, Arc<Lockout>)> =
             gc_data.handles.clone();
 
-        let mut scanables: Vec<(GcInternalHandle, &GcDataPtr, RwLockWriteGuard<()>)> = Vec::new();
-        for (handle, (data_ptr, data_lock)) in &handle_snapshot {
-            if let Some(guard) = data_lock.try_write() {
+        let mut scanables: Vec<(GcInternalHandle, &GcDataPtr, ExclusiveWarrant)> = Vec::new();
+        for (handle, (data_ptr, lockout)) in &handle_snapshot {
+            if let Some(guard) = Lockout::get_exclusive_warrant(lockout) {
                 scanables.push((handle.clone(), data_ptr, guard));
             }
         }
@@ -339,7 +340,7 @@ impl Collector {
             .cloned()
             .collect();
 
-        let mut gc_data = self.gc_data.lock();
+        let mut gc_data = self.gc_data.write();
         for h in &unreachable_handles {
             gc_data.handles.remove(h);
         }
@@ -363,33 +364,3 @@ impl Collector {
 }
 
 pub static COLLECTOR: Lazy<Arc<Collector>> = Lazy::new(Collector::new);
-
-// A way to pass around locks with associated guards
-// TODO: Double check safety here
-#[derive(Debug)]
-pub struct LockWithReadGuard<'a> {
-    lock: ManuallyDrop<Arc<RwLock<()>>>,
-    // The guard's lifetime is tied to the lifetime of the struct
-    guard: ManuallyDrop<RwLockReadGuard<'a, ()>>,
-}
-
-impl LockWithReadGuard<'_> {
-    pub fn new<'a>(lock: Arc<RwLock<()>>) -> LockWithReadGuard<'a> {
-        let guard = unsafe { std::mem::transmute(lock.read()) };
-
-        LockWithReadGuard {
-            lock: ManuallyDrop::new(lock),
-            guard: ManuallyDrop::new(guard),
-        }
-    }
-}
-
-impl Drop for LockWithReadGuard<'_> {
-    fn drop(&mut self) {
-        // Drop guard which references the lock, then the lock itself
-        unsafe {
-            ManuallyDrop::drop(&mut self.guard);
-            ManuallyDrop::drop(&mut self.lock);
-        }
-    }
-}
