@@ -77,7 +77,7 @@ mod test {
     }
 
     unsafe impl Scan for DirectedGraphNode {
-        fn scan(&self, out: &mut Vec<GcInternalHandle>) {
+        unsafe fn scan(&self, out: &mut Vec<GcInternalHandle>) {
             self.edges.scan(out);
         }
     }

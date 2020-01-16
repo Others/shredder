@@ -287,7 +287,9 @@ impl Collector {
         for (handle, &data_ptr, _) in &scanables {
             let mut results = Vec::new();
             let to_scan = unsafe { &*data_ptr.0 };
-            to_scan.scan(&mut results);
+            unsafe {
+                to_scan.scan(&mut results);
+            }
 
             for h in &results {
                 roots.remove(h);

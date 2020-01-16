@@ -65,6 +65,17 @@ impl<T: Scan> Drop for Gc<T> {
     }
 }
 
+// This is a little sketchy, but the Lockout mechanism means that we can share Sync pointers freely
+impl<T: Scan + Sync> Deref for Gc<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        unsafe  {
+            &*self.direct_ptr
+        }
+    }
+}
+
 // Lots of traits it's good for a smart ptr to implement:
 impl<T: Scan> Default for Gc<T>
 where
