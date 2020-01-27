@@ -13,7 +13,7 @@ use once_cell::sync::Lazy;
 use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
 
 use crate::lockout::{ExclusiveWarrant, Lockout, Warrant};
-use crate::Scan;
+use crate::{Scan, Scanner};
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct GcDataPtr(*const dyn Scan);
@@ -68,6 +68,11 @@ impl GcDataPtr {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct GcInternalHandle(u64);
+impl GcInternalHandle {
+    pub(crate) fn new(n: u64) -> Self {
+        Self(n)
+    }
+}
 
 struct TriggerData {
     // Percent more allocations needed to trigger garbage collection
@@ -90,7 +95,7 @@ pub struct Collector {
 
 const DEFAULT_TRIGGER_PERCENT: f32 = 0.75;
 
-// TODO: Update overall design document
+// TODO: Update HOW_IT_WORKS
 // Overall design
 // Stop the world when we get get everyone out of the GC
 //   (AKA, no-one has a reference to a GC'd object)
@@ -157,7 +162,7 @@ impl Collector {
 
     fn synthesize_handle(&self) -> GcInternalHandle {
         let n = self.handle_idx_count.fetch_add(1, Ordering::SeqCst);
-        GcInternalHandle(n)
+        GcInternalHandle::new(n)
     }
 
     pub fn track_data<T: Scan + 'static>(&self, data: T) -> (GcInternalHandle, *const T) {
@@ -223,6 +228,11 @@ impl Collector {
         Lockout::get_warrant(lockout)
     }
 
+    pub fn handle_valid(&self, handle: &GcInternalHandle) -> bool {
+        let gc_data = self.gc_data.read();
+        gc_data.handles.get(handle).is_some()
+    }
+
     pub fn tracked_data_count(&self) -> usize {
         let gc_data = self.gc_data.read();
         gc_data.data.len()
@@ -285,12 +295,11 @@ impl Collector {
         let mut roots: HashSet<GcInternalHandle> = handle_snapshot.keys().cloned().collect();
         let mut scan_results: HashMap<GcInternalHandle, Vec<GcInternalHandle>> = HashMap::new();
         for (handle, &data_ptr, _) in &scanables {
-            let mut results = Vec::new();
+            let mut scanner = Scanner::new();
             let to_scan = unsafe { &*data_ptr.0 };
-            unsafe {
-                to_scan.scan(&mut results);
-            }
+            to_scan.scan(&mut scanner);
 
+            let results = scanner.extract_found_handles();
             for h in &results {
                 roots.remove(h);
             }

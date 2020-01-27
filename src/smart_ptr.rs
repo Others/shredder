@@ -8,6 +8,7 @@ use crate::collector::{GcInternalHandle, COLLECTOR};
 use crate::lockout::Warrant;
 use crate::Scan;
 
+/// `Gc` is a smart-pointer for data tracked by `shredder` garbage collector
 #[derive(Debug)]
 pub struct Gc<T: Scan> {
     backing_handle: GcInternalHandle,
@@ -15,6 +16,7 @@ pub struct Gc<T: Scan> {
 }
 
 impl<T: Scan> Gc<T> {
+    /// Create a new `Gc` containing the given data
     pub fn new(v: T) -> Self
     where
         T: 'static,
@@ -26,6 +28,9 @@ impl<T: Scan> Gc<T> {
         }
     }
 
+    /// `get` is used to get a `GcGuard`. This is usually what you want when accessing non-`Sync`
+    /// data in a `Gc`. The API is very analogous to the `Mutex` API. It may block if the data is
+    /// being scanned
     #[must_use]
     pub fn get(&self) -> GcGuard<T> {
         let warrant = COLLECTOR.get_data_warrant(&self.backing_handle);
@@ -69,10 +74,10 @@ impl<T: Scan> Drop for Gc<T> {
 impl<T: Scan + Sync> Deref for Gc<T> {
     type Target = T;
 
+    #[must_use]
     fn deref(&self) -> &Self::Target {
-        unsafe  {
-            &*self.direct_ptr
-        }
+        assert!(COLLECTOR.handle_valid(&self.backing_handle));
+        unsafe { &*self.direct_ptr }
     }
 }
 
@@ -193,6 +198,8 @@ where
     }
 }
 
+/// A `GcGuard` lets you access the underlying data of a `Gc`
+/// It exists since non-`Sync` data needs protection from being scanned concurrently
 #[derive(Debug)]
 pub struct GcGuard<'a, T: Scan> {
     gc_ptr: &'a Gc<T>,

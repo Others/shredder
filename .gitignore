@@ -1,5 +1,10 @@
-/target
+# Rusty ignores
 **/*.rs.bk
+/target
+
+# We're a library -- don't include the lockfile
 Cargo.lock
+
+# I develop with IDEA
 .idea/
 *.iml
