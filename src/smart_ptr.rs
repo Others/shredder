@@ -206,8 +206,6 @@ pub struct GcGuard<'a, T: Scan> {
     warrant: Warrant,
 }
 
-// TODO: Consider Send/Sync implementations for GcGuard
-
 impl<'a, T: Scan> Deref for GcGuard<'a, T> {
     type Target = T;
 
@@ -230,3 +228,5 @@ impl<'a, T: Scan> Borrow<T> for GcGuard<'a, T> {
         self.deref()
     }
 }
+
+// TODO: Gc<RefCell<T>> will be a common case -- so we should provide some nice methods for that

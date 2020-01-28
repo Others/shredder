@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 use std::ops::Deref;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::collector::GcInternalHandle;
@@ -12,9 +12,9 @@ use crate::Gc;
 //  Enhance Scan with distinction between options
 //  Add flag, so we don't run destructors for non-'static data
 
-// TODO: Add a Scan auto-derive
-
 // TODO: Create a Safe way for non-Send data to be used
+
+// TODO: Add docs for `Scan` derive
 
 /// `Scan` is the trait capturing the ability of data to be scanned for references to other Gc data.
 ///
@@ -27,6 +27,16 @@ use crate::Gc;
 /// data.
 ///
 /// Importantly, any empty `scan` implementation is safe (assuming the `GcSafe` impl is correct)
+///
+/// In practice you probably want to use the derive macro:
+/// ```
+/// use shredder::Scan;
+///
+/// #[derive(Scan)]
+/// struct Example {
+///     v: u32
+/// }
+/// ```
 pub unsafe trait Scan: GcSafe {
     /// `scan` should use the scanner to scan all of its directly owned data
     fn scan(&self, scanner: &mut Scanner);
@@ -36,6 +46,8 @@ pub unsafe trait Scan: GcSafe {
 /// garbage collector. Data that is `GcSafe` satisfies the following requirements:
 /// 1) It's okay for any thread to call `scan`, as long as it has exclusive access to the data
 /// 2) Any thread can drop the data safely
+/// Requirement (1) can be relaxed if you can ensure that the type does not implement `Scan`
+///
 /// Importantly if a type is Send, then it is always `GcSafe`
 ///
 /// NOTE: `GcSafe` cannot simply be `Send`, since `Gc` must be `GcSafe` but sometimes is not `Send`
@@ -48,6 +60,7 @@ pub struct Scanner {
     found: Vec<GcInternalHandle>,
 }
 
+#[allow(clippy::unused_self)]
 impl Scanner {
     /// Create a new Scanner, with nothing found yet
     #[must_use]
@@ -59,6 +72,11 @@ impl Scanner {
     pub fn scan<T: Scan>(&mut self, from: &T) {
         from.scan(self);
     }
+
+    /// This function is used internally to fail the `Scan` derive if a field is not `GcSafe`
+    /// It's a little bit of a cludge, but that's okay for now
+    #[doc(hidden)]
+    pub fn check_gc_safe<T: GcSafe>(&self, _: &T) {}
 
     fn add_internal_handle<T: Scan>(&mut self, gc: &Gc<T>) {
         self.found.push(gc.internal_handle())
@@ -186,12 +204,15 @@ impl_empty_scan_for_send_type!(u128);
 
 // It's nice if other send types from std also get the scan treatment
 // These are value types that have no internal content needing a scan
+impl_empty_scan_for_send_type!(String);
+
 impl_empty_scan_for_send_type!(Duration);
 impl_empty_scan_for_send_type!(Instant);
 // TODO: Add more Scan impls here
 
-// All code bellow here used for testing only
-// TODO: Add tests for scan impls
+// Some other types are GcSafe, but not `Scan`
+unsafe impl<T: GcSafe> GcSafe for Arc<T> {}
+
 #[cfg(test)]
 mod test {
     use crate::collector::GcInternalHandle;
@@ -206,6 +227,8 @@ mod test {
             scanner.found.push(self.handle.clone())
         }
     }
+
+    // TODO: Add more tests for scan impls
 
     #[test]
     fn vec_scans_correctly() {

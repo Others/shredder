@@ -1,0 +1,5 @@
+error[E0277]: the trait bound `NotScan: shredder::Scan` is not satisfied
+ --> $DIR/non_scan.rs:6:10
+  |
+6 | #[derive(Scan)]
+  |          ^^^^ the trait `shredder::Scan` is not implemented for `NotScan`

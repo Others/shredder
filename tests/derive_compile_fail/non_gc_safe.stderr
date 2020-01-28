@@ -1,0 +1,5 @@
+error[E0277]: the trait bound `NotGcSafe: shredder::GcSafe` is not satisfied
+ --> $DIR/non_gc_safe.rs:6:10
+  |
+6 | #[derive(Scan)]
+  |          ^^^^ the trait `shredder::GcSafe` is not implemented for `NotGcSafe`

@@ -9,7 +9,7 @@
 //! - destructors: no need for finalization, your destructors are seamlessly run
 //! - ready for fearless concurrency: works in multi-threaded contexts
 //! - safe: detects error conditions on the fly, and protects you from common mistakes
-//! - limited stop-the world: no regular processing on data can be interrupted
+//! - limited stop-the world: regular processing will rarely be interrupted
 //! - concurrent collection: collection and destruction happens in the background
 //!
 //!
@@ -17,8 +17,8 @@
 //! - non-sync ergonomics: `Send` objects need a guard object
 //! - multiple collectors: multiple collectors do not co-operate
 //! - can't handle `Rc`/`Arc`: requires all `Gc` objects have straightforward ownership semantics
-//! - no derive for `Scan`: this would make implementing `Scan` easier (WIP)
 //! - non static data: `Gc` cannot handle non 'static data (fix WIP)
+//! - `Gc<RefCell<_>>` is a bit awkward: this is a common case (fix WIP)
 
 // We love docs here
 #![deny(missing_docs)]
@@ -50,13 +50,32 @@ use collector::COLLECTOR;
 pub use scan::{GcSafe, Scan, Scanner};
 pub use smart_ptr::{Gc, GcGuard};
 
+// Re-export the Scan derive
+pub use shredder_derive::Scan;
+
 /// Returns how many underlying allocations are currently allocated
+///
+/// # Example
+/// ```
+/// use shredder::{number_of_tracked_allocations, Gc};
+///
+/// let data = Gc::new(128);
+/// assert!(number_of_tracked_allocations() > 0);
+/// ```
 #[must_use]
 pub fn number_of_tracked_allocations() -> usize {
     COLLECTOR.tracked_data_count()
 }
 
 /// Returns how many `Gc`s are currently in use
+///
+/// # Example
+/// ```
+/// use shredder::{number_of_active_handles, Gc};
+///
+/// let data = Gc::new(128);
+/// assert!(number_of_active_handles() > 0);
+/// ```
 #[must_use]
 pub fn number_of_active_handles() -> usize {
     COLLECTOR.handle_count()
@@ -70,6 +89,12 @@ pub fn number_of_active_handles() -> usize {
 /// ```
 /// The default value of `gc_trigger_percent` is 0.75, but `set_gc_trigger_percent` lets you configure
 /// it yourself. Only values 0 or greater are allowed
+///
+/// # Example
+/// ```
+/// use shredder::set_gc_trigger_percent;
+/// set_gc_trigger_percent(0.75); // GC will trigger after data exceeds 1.75x previous heap size
+/// ```
 pub fn set_gc_trigger_percent(percent: f32) {
     if percent < -0.0 || percent.is_nan() {
         panic!(
@@ -85,129 +110,13 @@ pub fn set_gc_trigger_percent(percent: f32) {
 /// designed to be run in the background, while this method runs it on the thread that calls the
 /// method. Additionally, you may end up blocking waiting to collect, since `shredder` doesn't allow
 /// two collections at once
+///
+/// # Example
+/// ```
+/// use shredder::collect;
+/// collect(); // Manually run GC
+/// ```
 #[allow(clippy::must_use_candidate)]
 pub fn collect() {
     COLLECTOR.collect();
-}
-
-// TODO: Add many more tests
-// TODO: Run tests under valgrind
-#[cfg(test)]
-mod test {
-    use std::cell::RefCell;
-    use std::mem::drop;
-    use std::ops::Deref;
-
-    use once_cell::sync::Lazy;
-    use parking_lot::Mutex;
-
-    use super::*;
-
-    static TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-
-    #[derive(Debug)]
-    struct DirectedGraphNode {
-        label: String,
-        edges: Vec<Gc<RefCell<DirectedGraphNode>>>,
-    }
-
-    unsafe impl Scan for DirectedGraphNode {
-        fn scan(&self, scanner: &mut Scanner) {
-            scanner.scan(&self.edges);
-        }
-    }
-    unsafe impl GcSafe for DirectedGraphNode {}
-
-    #[test]
-    fn alloc_u32_gc() {
-        let guard = TEST_MUTEX.lock();
-        assert_eq!(number_of_tracked_allocations(), 0);
-
-        let val = 7;
-
-        let gc_ptr = Gc::new(val);
-        assert_eq!(*gc_ptr.get(), val);
-        drop(gc_ptr);
-
-        collect();
-        assert_eq!(number_of_tracked_allocations(), 0);
-        drop(guard);
-    }
-
-    #[test]
-    fn alloc_directed_graph_node_gc() {
-        let guard = TEST_MUTEX.lock();
-        assert_eq!(number_of_tracked_allocations(), 0);
-
-        let node = DirectedGraphNode {
-            label: "A".to_string(),
-            edges: Vec::new(),
-        };
-
-        let gc_ptr = Gc::new(node);
-        assert_eq!(gc_ptr.get().label, "A");
-        drop(gc_ptr);
-
-        collect();
-        assert_eq!(number_of_tracked_allocations(), 0);
-        drop(guard);
-    }
-
-    #[test]
-    fn clone_directed_graph_node_gc() {
-        let guard = TEST_MUTEX.lock();
-        assert_eq!(number_of_tracked_allocations(), 0);
-
-        let node = DirectedGraphNode {
-            label: "A".to_string(),
-            edges: Vec::new(),
-        };
-
-        let gc_ptr_one = Gc::new(node);
-        let gc_ptr_two = gc_ptr_one.clone();
-        assert_eq!(number_of_tracked_allocations(), 1);
-        assert_eq!(number_of_active_handles(), 2);
-
-        assert_eq!(gc_ptr_one.get().label, "A");
-        assert_eq!(gc_ptr_two.get().label, "A");
-        drop(gc_ptr_one);
-        drop(gc_ptr_two);
-
-        collect();
-        assert_eq!(number_of_tracked_allocations(), 0);
-        drop(guard);
-    }
-
-    #[test]
-    fn clone_directed_graph_chain_gc() {
-        let guard = TEST_MUTEX.lock();
-        assert_eq!(number_of_tracked_allocations(), 0);
-
-        let node = DirectedGraphNode {
-            label: "A".to_string(),
-            edges: Vec::new(),
-        };
-
-        let gc_ptr_one = Gc::new(RefCell::new(node));
-        let gc_ptr_two = gc_ptr_one.clone();
-        assert_eq!(number_of_tracked_allocations(), 1);
-        assert_eq!(number_of_active_handles(), 2);
-
-        assert_eq!(gc_ptr_one.get().borrow().label, "A");
-        assert_eq!(gc_ptr_two.get().borrow().label, "A");
-
-        gc_ptr_two
-            .get()
-            .deref()
-            .borrow_mut()
-            .edges
-            .push(gc_ptr_one.clone());
-
-        drop(gc_ptr_one);
-        drop(gc_ptr_two);
-
-        collect();
-        assert_eq!(number_of_tracked_allocations(), 0);
-        drop(guard);
-    }
 }

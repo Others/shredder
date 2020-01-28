@@ -93,9 +93,11 @@ pub struct Collector {
     gc_data: RwLock<TrackedGcData>,
 }
 
+// TODO: This is probably good enough for basic use, but needs to be enhanced
 const DEFAULT_TRIGGER_PERCENT: f32 = 0.75;
+const MIN_ALLOCATIONS_FOR_COLLECTION: f32 = 512.0 * 1.3;
 
-// TODO: Update HOW_IT_WORKS
+// TODO: write up how it works
 // Overall design
 // Stop the world when we get get everyone out of the GC
 //   (AKA, no-one has a reference to a GC'd object)
@@ -130,7 +132,7 @@ impl Collector {
             }
         });
 
-        let (async_gc_trigger, async_gc_reciever) = mpsc::channel::<()>();
+        let (async_gc_trigger, async_gc_receiver) = mpsc::channel::<()>();
 
         let res = Arc::new(Self {
             handle_idx_count: AtomicU64::new(1),
@@ -150,7 +152,7 @@ impl Collector {
         let async_collector_ref = Arc::downgrade(&res);
         spawn(move || {
             // An Err value means the stream will never recover
-            while let Ok(_) = async_gc_reciever.recv() {
+            while let Ok(_) = async_gc_receiver.recv() {
                 if let Some(collector) = async_collector_ref.upgrade() {
                     collector.check_then_collect();
                 }
@@ -256,24 +258,28 @@ impl Collector {
         let percent_more_data =
             new_data_count as f32 / trigger_data.data_count_at_last_collection as f32;
 
-        if !percent_more_data.is_finite() || percent_more_data >= trigger_data.gc_trigger_percent {
-            self.do_collect(trigger_data, gc_data)
+        let at_min_allocations = tracked_data_count as f32 > MIN_ALLOCATIONS_FOR_COLLECTION;
+        let infinite_percent_extra_data = !percent_more_data.is_finite();
+        let above_trigger_percent = percent_more_data >= trigger_data.gc_trigger_percent;
+        if at_min_allocations && (infinite_percent_extra_data || above_trigger_percent) {
+            self.do_collect(trigger_data, gc_data);
+            true
         } else {
             false
         }
     }
 
-    pub fn collect(&self) -> bool {
+    pub fn collect(&self) {
         let trigger_data = self.trigger_data.lock();
         let gc_data = self.gc_data.read();
-        self.do_collect(trigger_data, gc_data)
+        self.do_collect(trigger_data, gc_data);
     }
 
     fn do_collect(
         &self,
         mut trigger_data: MutexGuard<TriggerData>,
         gc_data: RwLockReadGuard<TrackedGcData>,
-    ) -> bool {
+    ) {
         trace!("Beginning collection");
         // We want to get a snapshot of what the handles and the data look like
         let data_snapshot: HashMap<GcDataPtr, Arc<Lockout>> = gc_data.data.clone();
@@ -361,7 +367,7 @@ impl Collector {
             if let Some((ptr, _)) = gc_data.data.remove_entry(d) {
                 drop_thread_chan
                     .send(ptr)
-                    .expect("drop thread should be infallable");
+                    .expect("drop thread should be infallible");
             }
         }
         drop(gc_data);
@@ -369,8 +375,6 @@ impl Collector {
         trigger_data.data_count_at_last_collection = self.tracked_data_count();
 
         trace!("Collection finished");
-
-        true
     }
 }
 

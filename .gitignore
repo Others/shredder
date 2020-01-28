@@ -2,6 +2,9 @@
 **/*.rs.bk
 /target
 
+# For trybuild
+wip
+
 # We're a library -- don't include the lockfile
 Cargo.lock
 

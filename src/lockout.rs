@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 
 const EXCLUSIVE_SIGNPOST: u64 = !0;
 
-// TODO: Do a double check of races here
+// TODO: Get someone else to audit races here
 #[derive(Debug)]
 pub struct Lockout {
     count: AtomicU64,
@@ -101,6 +101,7 @@ pub struct ExclusiveWarrant {
 
 impl Drop for ExclusiveWarrant {
     fn drop(&mut self) {
+        let _guard = self.lockout.lockout_mutex.lock();
         let prev_count =
             self.lockout
                 .count
@@ -109,3 +110,5 @@ impl Drop for ExclusiveWarrant {
         self.lockout.lockout_condvar.notify_all();
     }
 }
+
+// TODO: Tests for the Lockout system
