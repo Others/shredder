@@ -47,11 +47,13 @@ mod smart_ptr;
 
 use collector::COLLECTOR;
 
-pub use scan::{GcSafe, Scan, Scanner};
+pub use scan::{GcSafe, GcSafeWrapper, Scan, Scanner};
 pub use smart_ptr::{Gc, GcGuard};
 
 // Re-export the Scan derive
 pub use shredder_derive::Scan;
+
+// TODO: Turn TODOs into Github issues
 
 /// Returns how many underlying allocations are currently allocated
 ///

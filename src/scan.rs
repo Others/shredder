@@ -1,20 +1,14 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::hash::BuildHasher;
-use std::ops::Deref;
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::collector::GcInternalHandle;
 use crate::Gc;
 
-// TODO: Add non-'static data as an option
-//  Enhance Scan with distinction between options
-//  Add flag, so we don't run destructors for non-'static data
-
 // TODO: Create a Safe way for non-Send data to be used
-
-// TODO: Add docs for `Scan` derive
 
 /// `Scan` is the trait capturing the ability of data to be scanned for references to other Gc data.
 ///
@@ -22,12 +16,13 @@ use crate::Gc;
 /// this can only happen if the `scan` scans data that the concrete object does not own. In other
 /// words, missing connected data can only cause leaks, not memory unsafety.
 ///
-/// Note: It's important that `scan` only scans data that is truly owned. `Rc`/`Arc` cannot have
+/// Importantly, any empty `scan` implementation is safe (assuming the `GcSafe` impl is correct)
+///
+/// NB: It's important that `scan` only scans data that is truly owned. `Rc`/`Arc` cannot have
 /// sensible `scan` implementations, since each individual smart pointer doesn't own the underlying
 /// data.
 ///
-/// Importantly, any empty `scan` implementation is safe (assuming the `GcSafe` impl is correct)
-///
+/// # Examples
 /// In practice you probably want to use the derive macro:
 /// ```
 /// use shredder::Scan;
@@ -35,6 +30,51 @@ use crate::Gc;
 /// #[derive(Scan)]
 /// struct Example {
 ///     v: u32
+/// }
+/// ```
+///
+/// This also comes with a `#[shredder(skip)]` attribute, for when some data implements `GcSafe` but
+/// not `Scan`
+/// ```
+/// use std::sync::Arc;
+/// use shredder::Scan;
+///
+/// #[derive(Scan)]
+/// struct Example {
+///     #[shredder(skip)]
+///     v: Arc<u32>
+/// }
+/// ```
+///
+/// This can work for any `Send` data using `GcSafeWrapper`
+/// ```
+/// use std::sync::Arc;
+/// use shredder::{Scan, GcSafeWrapper};
+///
+/// struct SendDataButNotScan {
+///     i: u32
+/// }
+///
+/// #[derive(Scan)]
+/// struct Example {
+///     #[shredder(skip)]
+///     v: GcSafeWrapper<SendDataButNotScan>
+/// }
+/// ```
+///
+/// In emergencies, you can break out `#[shredder(unsafe_skip)]`, but this is potentially unsafe
+/// ```
+/// use std::sync::Arc;
+/// use shredder::{Scan, GcSafeWrapper};
+///
+/// struct NotEvenSendData {
+///     data: *mut u32
+/// }
+///
+/// #[derive(Scan)]
+/// struct Example {
+///     #[shredder(unsafe_skip)]
+///     v: NotEvenSendData
 /// }
 /// ```
 pub unsafe trait Scan: GcSafe {
@@ -126,6 +166,58 @@ macro_rules! impl_empty_scan_for_send_type {
         }
     };
 }
+
+/// `GcSafeWrapper` wraps a `Send` datatype to make it `GcSafe`
+/// See the documentation of `Send` to see where this would be useful
+pub struct GcSafeWrapper<T: Send> {
+    /// The wrapped value
+    pub v: T,
+}
+unsafe impl<T: Send> GcSafe for GcSafeWrapper<T> where GcSafeWrapper<T>: Send {}
+
+impl<T: Send> GcSafeWrapper<T> {
+    /// Create a new `GcSafeWrapper` storing `v`
+    pub fn new(v: T) -> Self {
+        Self { v }
+    }
+
+    /// `take` the value out of this wrapper
+    pub fn take(self) -> T {
+        self.v
+    }
+}
+
+impl<T: Send> Deref for GcSafeWrapper<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.v
+    }
+}
+
+impl<T: Send> DerefMut for GcSafeWrapper<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.v
+    }
+}
+
+impl<T: Send + Hash> Hash for GcSafeWrapper<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.v.hash(state);
+    }
+}
+
+#[allow(clippy::partialeq_ne_impl)]
+impl<T: Send + PartialEq> PartialEq for GcSafeWrapper<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.v.eq(other)
+    }
+
+    fn ne(&self, other: &Self) -> bool {
+        self.v.ne(other)
+    }
+}
+impl<T: Send + Eq> Eq for GcSafeWrapper<T> {}
 
 // For collections that own their elements, Collection<T>: Scan iff T: Scan
 // Safety: GcSafe is a structural property for normally Send collections
