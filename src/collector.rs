@@ -97,6 +97,8 @@ pub struct Collector {
 const DEFAULT_TRIGGER_PERCENT: f32 = 0.75;
 const MIN_ALLOCATIONS_FOR_COLLECTION: f32 = 512.0 * 1.3;
 
+// TODO: Do benchmarks to see how slow this is
+
 // TODO: write up how it works
 // Overall design
 // Stop the world when we get get everyone out of the GC

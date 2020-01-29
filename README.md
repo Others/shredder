@@ -58,3 +58,9 @@ fn main() {
 ```
 
 If you're playing with this and run into a problem, go ahead and make a Github issue. Eventually there will be a FAQ.
+
+Help Wanted!
+------------
+If you're interested in helping with `shredder`, feel free to reach out.
+I'm @Others on the Rust discord. Or just look for an issue marked `help wanted
+` or `good first issue`
