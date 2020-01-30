@@ -23,49 +23,49 @@ impl Lockout {
         })
     }
 
-    pub fn get_warrant(this: &Arc<Self>) -> Warrant {
-        let starting_count = this.count.load(Ordering::SeqCst);
+    pub fn get_warrant(self: &Arc<Self>) -> Warrant {
+        let starting_count = self.count.load(Ordering::SeqCst);
 
         // Fast path, where the count is not SIGNPOSTED
         if starting_count != EXCLUSIVE_SIGNPOST {
             let prev_value =
-                this.count
+                self.count
                     .compare_and_swap(starting_count, starting_count + 1, Ordering::SeqCst);
             if prev_value == starting_count {
                 return Warrant {
-                    lockout: this.clone(),
+                    lockout: self.clone(),
                 };
             }
         }
 
         // Slow path, where we need to wait on a potential signposted val
-        let mut guard = this.lockout_mutex.lock();
+        let mut guard = self.lockout_mutex.lock();
         loop {
-            let value = this.count.load(Ordering::SeqCst);
+            let value = self.count.load(Ordering::SeqCst);
 
             if value == EXCLUSIVE_SIGNPOST {
-                this.lockout_condvar.wait(&mut guard);
+                self.lockout_condvar.wait(&mut guard);
             } else {
-                let prev_value = this
+                let prev_value = self
                     .count
                     .compare_and_swap(value, value + 1, Ordering::SeqCst);
                 if prev_value == value {
                     return Warrant {
-                        lockout: this.clone(),
+                        lockout: self.clone(),
                     };
                 }
             }
         }
     }
 
-    pub fn get_exclusive_warrant(this: &Arc<Self>) -> Option<ExclusiveWarrant> {
-        let prev_value = this
+    pub fn get_exclusive_warrant(self: &Arc<Self>) -> Option<ExclusiveWarrant> {
+        let prev_value = self
             .count
             .compare_and_swap(0, EXCLUSIVE_SIGNPOST, Ordering::SeqCst);
 
         if prev_value == 0 {
             Some(ExclusiveWarrant {
-                lockout: this.clone(),
+                lockout: self.clone(),
             })
         } else {
             None

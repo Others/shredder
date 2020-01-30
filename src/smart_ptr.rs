@@ -76,6 +76,7 @@ impl<T: Scan + Sync> Deref for Gc<T> {
 
     #[must_use]
     fn deref(&self) -> &Self::Target {
+        // TODO: Optimize this safety check
         assert!(COLLECTOR.handle_valid(&self.backing_handle));
         unsafe { &*self.direct_ptr }
     }

@@ -229,7 +229,7 @@ impl Collector {
         let (_, lockout) = gc_data.handles.get(handle)
             .expect("Tried to access Gc data, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
 
-        Lockout::get_warrant(lockout)
+        lockout.get_warrant()
     }
 
     pub fn handle_valid(&self, handle: &GcInternalHandle) -> bool {
@@ -277,6 +277,7 @@ impl Collector {
         self.do_collect(trigger_data, gc_data);
     }
 
+    // TODO: Optimize this method
     fn do_collect(
         &self,
         mut trigger_data: MutexGuard<TriggerData>,
@@ -289,9 +290,12 @@ impl Collector {
             gc_data.handles.clone();
 
         let mut scanables: Vec<(GcInternalHandle, &GcDataPtr, ExclusiveWarrant)> = Vec::new();
+        let mut unscanables: Vec<GcInternalHandle> = Vec::new();
         for (handle, (data_ptr, lockout)) in &handle_snapshot {
-            if let Some(guard) = Lockout::get_exclusive_warrant(lockout) {
+            if let Some(guard) = lockout.get_exclusive_warrant() {
                 scanables.push((handle.clone(), data_ptr, guard));
+            } else {
+                unscanables.push(handle.clone());
             }
         }
         drop(gc_data);
@@ -315,6 +319,8 @@ impl Collector {
             scan_results.insert(handle.clone(), results);
         }
         drop(scanables);
+        // If something couldn't be scanned, it must be in use
+        roots.extend(unscanables.into_iter());
 
         // Now let's basically do DFS
         let mut frontier_stack: Vec<GcInternalHandle> = Vec::from_iter(roots.iter().cloned());
