@@ -6,7 +6,8 @@ use parking_lot::Mutex;
 
 const EXCLUSIVE_SIGNPOST: u64 = !0;
 
-// TODO: Get someone else to audit races here
+/// The Lockout mechanism is used internally. It's basically just a `RwLock` that doesn't support
+/// blocking on reads, and gives out guards that use an Arc instead of a reference
 #[derive(Debug)]
 pub struct Lockout {
     count: AtomicU64,
@@ -111,4 +112,4 @@ impl Drop for ExclusiveWarrant {
     }
 }
 
-// TODO: Tests for the Lockout system
+// TODO(issue): https://github.com/Others/shredder/issues/10

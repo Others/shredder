@@ -53,8 +53,6 @@ pub use smart_ptr::{Gc, GcGuard};
 // Re-export the Scan derive
 pub use shredder_derive::Scan;
 
-// TODO: Turn TODOs into Github issues
-
 /// Returns how many underlying allocations are currently allocated
 ///
 /// # Example
@@ -82,8 +80,6 @@ pub fn number_of_tracked_allocations() -> usize {
 pub fn number_of_active_handles() -> usize {
     COLLECTOR.handle_count()
 }
-
-// TODO: Consider creating a mechanism for configuration "priority"
 
 /// `shredders` collection automatically triggers when:
 /// ```text

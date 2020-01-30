@@ -27,8 +27,6 @@ impl UnwindSafe for GcDataPtr {}
 unsafe impl Sync for GcDataPtr {}
 
 impl GcDataPtr {
-    // TODO: Consider how to remove the 'static bound here
-    //       Because we can Scan after data goes out of scope, this is very non-trivial
     fn allocate<T: Scan + 'static>(v: T) -> (Self, *const T) {
         // This is a straightforward use of alloc/write -- it should be undef free
         let data_ptr = unsafe {
@@ -93,26 +91,11 @@ pub struct Collector {
     gc_data: RwLock<TrackedGcData>,
 }
 
-// TODO: This is probably good enough for basic use, but needs to be enhanced
+// TODO(issue): https://github.com/Others/shredder/issues/8
 const DEFAULT_TRIGGER_PERCENT: f32 = 0.75;
 const MIN_ALLOCATIONS_FOR_COLLECTION: f32 = 512.0 * 1.3;
 
-// TODO: Do benchmarks to see how slow this is
-
-// TODO: write up how it works
-// Overall design
-// Stop the world when we get get everyone out of the GC
-//   (AKA, no-one has a reference to a GC'd object)
-//   To this end, we keep a "held_references" count, incremented when a guard is taken, decremented when it's dropped
-//   If an allocation happens or a guard is dropped, and "held_references" is zero, we consider a GC
-//   If we start a GC, we stop everyone else from taking references
-//
-// After stopping we need to find the roots
-//   To do this, we find all the handles held by any piece of GC data
-//   If a handle is not held by any GC data, it must be held by non GC'd data, and is a root!
-//   (Care must be taken to flag BackingGcHandles that no one holds)
-//
-// With a stopped world + roots, then we can simply mark and sweep
+// TODO(issue): https://github.com/Others/shredder/issues/7
 
 impl Collector {
     fn new() -> Arc<Self> {
@@ -127,8 +110,6 @@ impl Collector {
                     ptr.deallocate();
                 });
                 if let Err(e) = res {
-                    // TODO: Consider log vs. eprintln
-                    //   error!("Gc background drop failed: {:?}", e);
                     eprintln!("Gc background drop failed: {:?}", e);
                 }
             }
@@ -277,7 +258,7 @@ impl Collector {
         self.do_collect(trigger_data, gc_data);
     }
 
-    // TODO: Optimize this method
+    // TODO(issue): https://github.com/Others/shredder/issues/13
     fn do_collect(
         &self,
         mut trigger_data: MutexGuard<TriggerData>,

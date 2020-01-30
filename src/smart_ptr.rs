@@ -76,7 +76,7 @@ impl<T: Scan + Sync> Deref for Gc<T> {
 
     #[must_use]
     fn deref(&self) -> &Self::Target {
-        // TODO: Optimize this safety check
+        // TODO(issue): https://github.com/Others/shredder/issues/1
         assert!(COLLECTOR.handle_valid(&self.backing_handle));
         unsafe { &*self.direct_ptr }
     }
@@ -229,5 +229,3 @@ impl<'a, T: Scan> Borrow<T> for GcGuard<'a, T> {
         self.deref()
     }
 }
-
-// TODO: Gc<RefCell<T>> will be a common case -- so we should provide some nice methods for that

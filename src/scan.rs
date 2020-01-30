@@ -8,8 +8,6 @@ use std::time::{Duration, Instant};
 use crate::collector::GcInternalHandle;
 use crate::Gc;
 
-// TODO: Create a Safe way for non-Send data to be used
-
 /// `Scan` is the trait capturing the ability of data to be scanned for references to other Gc data.
 ///
 /// It is unsafe since a bad `scan` implementation can cause memory unsafety. However, importantly,
@@ -264,7 +262,7 @@ unsafe impl<T: Scan> GcSafe for RefCell<T> {}
 
 unsafe impl<T: Scan> Scan for Mutex<T> {
     fn scan(&self, scanner: &mut Scanner) {
-        // TODO: Consider the treatment of poisoned mutexes
+        // TODO(issue): https://github.com/Others/shredder/issues/6
 
         // It's okay if we can't scan for now -- if the mutex is locked everything below is still in use
         if let Ok(data) = self.try_lock() {
@@ -300,11 +298,14 @@ impl_empty_scan_for_send_type!(String);
 
 impl_empty_scan_for_send_type!(Duration);
 impl_empty_scan_for_send_type!(Instant);
-// TODO: Add more Scan impls here
+
+// impl you need missing? Check the link!
+// TODO(issue): https://github.com/Others/shredder/issues/5
 
 // Some other types are GcSafe, but not `Scan`
 unsafe impl<T: GcSafe> GcSafe for Arc<T> {}
 
+// TODO(issue): https://github.com/Others/shredder/issues/4
 #[cfg(test)]
 mod test {
     use crate::collector::GcInternalHandle;
@@ -319,8 +320,6 @@ mod test {
             scanner.found.push(self.handle.clone())
         }
     }
-
-    // TODO: Add more tests for scan impls
 
     #[test]
     fn vec_scans_correctly() {

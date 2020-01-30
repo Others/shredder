@@ -11,8 +11,6 @@ use shredder::*;
 
 static TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-// TODO: More tests
-
 #[derive(Debug, Scan)]
 struct DirectedGraphNode {
     label: String,
