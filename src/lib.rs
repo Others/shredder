@@ -8,7 +8,7 @@
 //! - fairly ergonomic: no need to manually manage roots, just a regular smart pointer
 //! - destructors: no need for finalization, your destructors are seamlessly run
 //! - ready for fearless concurrency: works in multi-threaded contexts
-//! - safe: detects error conditions on the fly, and protects you from common mistakes
+//! - safe: detects error conditions on the fly, and protects you from undefined behavior
 //! - limited stop-the world: regular processing will rarely be interrupted
 //! - concurrent collection: collection and destruction happens in the background
 //!
@@ -18,7 +18,6 @@
 //! - multiple collectors: multiple collectors do not co-operate
 //! - can't handle `Rc`/`Arc`: requires all `Gc` objects have straightforward ownership semantics
 //! - non static data: `Gc` cannot handle non 'static data (fix WIP)
-//! - `Gc<RefCell<_>>` is a bit awkward: this is a common case (fix WIP)
 
 // We love docs here
 #![deny(missing_docs)]
@@ -39,6 +38,9 @@
 
 #[macro_use]
 extern crate log;
+
+#[macro_use]
+extern crate rental;
 
 mod collector;
 mod lockout;

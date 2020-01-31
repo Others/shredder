@@ -8,7 +8,7 @@ of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
 - fairly ergonomic: no need to manually manage roots, just a regular smart pointer
 - destructors: no need for finalization, your destructors are seamlessly run
 - ready for fearless concurrency: works in multi-threaded contexts
-- safe: detects error conditions on the fly, and protects you from common mistakes
+- safe: detects error conditions on the fly, and protects you from undefined behavior
 - limited stop-the world: regular processing will rarely be interrupted
 - concurrent collection: collection and destruction happens in the background
 
@@ -17,7 +17,6 @@ of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
 - multiple collectors: multiple collectors do not co-operate
 - can't handle `Rc`/`Arc`: requires all `Gc` objects have straightforward ownership semantics
 - non static data: `Gc` cannot handle non 'static data (fix WIP)
-- `Gc<RefCell<_>>` is a bit awkward to work with, and this is a common case: need to `get` then `borrow` (fix WIP)
 
 Getting Started
 ---------------
@@ -44,10 +43,10 @@ fn main() {
             data: "B".to_string(),
             directed_edges: Vec::new(),
         }));
-        // Needs `get`, since `RefCell` is not `Sync`
-        // If we used `Mutex`, we would not need `get`
-        a.get().borrow_mut().directed_edges.push(b.clone());
-        b.get().borrow_mut().directed_edges.push(a.clone());
+
+        // Usually would need `get` for non-`Sync` data, but `RefCell` is a special case
+        a.borrow_mut().directed_edges.push(b.clone());
+        b.borrow_mut().directed_edges.push(a.clone());
     }
 
     // Running `collect` like this, at the end of main (after everything is dropped) is good practice

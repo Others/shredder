@@ -1,8 +1,11 @@
 use std::borrow::Borrow;
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
+
+use stable_deref_trait::StableDeref;
 
 use crate::collector::{GcInternalHandle, COLLECTOR};
 use crate::lockout::Warrant;
@@ -79,6 +82,50 @@ impl<T: Scan + Sync> Deref for Gc<T> {
         // TODO(issue): https://github.com/Others/shredder/issues/1
         assert!(COLLECTOR.handle_valid(&self.backing_handle));
         unsafe { &*self.direct_ptr }
+    }
+}
+
+// This is special casing for Gc<RefCell<T>>
+rental! {
+    pub mod rent_refs {
+        use crate::{Scan, GcGuard};
+        use std::cell::{Ref, RefCell, RefMut};
+
+        /// Self referential wrapper around `Ref` for ergonomics
+        #[rental(deref_suffix)]
+        pub struct GcRef<'a, T: Scan + 'static> {
+            gc_guard: GcGuard<'a, RefCell<T>>,
+            cell_ref: Ref<'gc_guard, T>
+        }
+
+        /// Self referential wrapper around `RefMut` for ergonomics
+        #[rental(deref_mut_suffix)]
+        pub struct GcRefMut<'a, T: Scan + 'static> {
+            gc_guard: GcGuard<'a, RefCell<T>>,
+            cell_ref: RefMut<'gc_guard, T>
+        }
+    }
+}
+/// It is impossible for the value behind a `GcGuard` to move (since it's basically a `&T`)
+unsafe impl<'a, T: Scan> StableDeref for GcGuard<'a, T> {}
+
+impl<T: Scan> Gc<RefCell<T>> {
+    /// Call the underlying `borrow` method on the `RefCell`.
+    ///
+    /// This is just a nice method so you don't have to call `get` manually.
+    #[must_use]
+    pub fn borrow(&self) -> rent_refs::GcRef<T> {
+        let b = self.get();
+        rent_refs::GcRef::new(b, RefCell::borrow)
+    }
+
+    /// Call the underlying `borrow_mut` method on the `RefCell`.
+    ///
+    /// This is just a nice method so you don't have to call `get` manually.
+    #[must_use]
+    pub fn borrow_mut(&self) -> rent_refs::GcRefMut<T> {
+        let b = self.get();
+        rent_refs::GcRefMut::new(b, RefCell::borrow_mut)
     }
 }
 

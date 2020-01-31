@@ -21,10 +21,13 @@ fn _main() {
             directed_edges: Vec::new(),
         }));
 
-        a.get().borrow_mut().directed_edges.push(b.clone());
-        b.get().borrow_mut().directed_edges.push(a.clone());
+        // Usually would need `get` for non-`Sync` data, but `RefCell` is a special case
+        a.borrow_mut().directed_edges.push(b.clone());
+        b.borrow_mut().directed_edges.push(a.clone());
     }
 
+    // Running `collect` like this, at the end of main (after everything is dropped) is good practice
+    // It helps ensure destructors are run
     collect();
     assert_eq!(number_of_tracked_allocations(), 0);
 }
