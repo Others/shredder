@@ -260,6 +260,15 @@ unsafe impl<T: Scan> Scan for RefCell<T> {
 }
 unsafe impl<T: Scan> GcSafe for RefCell<T> {}
 
+unsafe impl<T: Scan> Scan for Option<T> {
+    fn scan(&self, scanner: &mut Scanner) {
+        if let Some(v) = self {
+            scanner.scan(v);
+        }
+    }
+}
+unsafe impl<T: Scan> GcSafe for Option<T> {}
+
 unsafe impl<T: Scan> Scan for Mutex<T> {
     fn scan(&self, scanner: &mut Scanner) {
         // TODO(issue): https://github.com/Others/shredder/issues/6

@@ -22,4 +22,5 @@ shredder_derive = { git = "https://github.com/Others/shredder_derive.git" }
 stable_deref_trait = "1.1"
 
 [dev-dependencies]
+rand = "0.7.3"
 trybuild = "1.0"

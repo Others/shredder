@@ -3,13 +3,13 @@ extern crate shredder;
 use std::cell::RefCell;
 use std::mem::drop;
 use std::ops::Deref;
+use std::sync;
 
 use once_cell::sync::Lazy;
-use parking_lot::Mutex;
 
 use shredder::*;
 
-static TEST_MUTEX: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static TEST_MUTEX: Lazy<parking_lot::Mutex<()>> = Lazy::new(|| parking_lot::Mutex::new(()));
 
 #[derive(Debug, Scan)]
 struct DirectedGraphNode {
@@ -108,4 +108,35 @@ fn clone_directed_graph_chain_gc() {
     collect();
     assert_eq!(number_of_tracked_allocations(), 0);
     drop(guard);
+}
+
+#[derive(Debug, Default, Scan)]
+struct Connection {
+    connect: Option<Gc<sync::Mutex<Connection>>>,
+}
+
+#[test]
+fn scan_skip_problem() {
+    let _guard = TEST_MUTEX.lock();
+
+    assert_eq!(number_of_tracked_allocations(), 0);
+    let root_con = Gc::new(sync::Mutex::new(Connection::default()));
+
+    let hidden = Gc::new(sync::Mutex::new(Connection::default()));
+    let hider = Gc::new(sync::Mutex::new(Connection::default()));
+    {
+        root_con.lock().unwrap().connect = Some(hidden.clone());
+        hider.lock().unwrap().connect = Some(hidden.clone());
+    }
+    drop(hidden);
+    drop(hider);
+
+    let root_blocker = root_con.lock().unwrap();
+    collect();
+    assert_eq!(number_of_tracked_allocations(), 2);
+
+    drop(root_blocker);
+    drop(root_con);
+    collect();
+    assert_eq!(number_of_tracked_allocations(), 0);
 }

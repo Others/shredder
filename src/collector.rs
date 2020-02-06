@@ -1,6 +1,5 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::collections::{HashMap, HashSet};
-use std::iter::FromIterator;
 use std::mem::ManuallyDrop;
 use std::panic::{catch_unwind, UnwindSafe};
 use std::ptr;
@@ -61,6 +60,16 @@ impl GcDataPtr {
         let dealloc_layout = Layout::for_value(&*scan_ptr);
         let heap_ptr = scan_ptr as *mut u8;
         dealloc(heap_ptr, dealloc_layout);
+    }
+
+    fn scan(&self) -> Vec<GcInternalHandle> {
+        unsafe {
+            let mut scanner = Scanner::new();
+            let to_scan = &*self.0;
+            to_scan.scan(&mut scanner);
+
+            scanner.extract_found_handles()
+        }
     }
 }
 
@@ -265,98 +274,93 @@ impl Collector {
         gc_data: RwLockReadGuard<TrackedGcData>,
     ) {
         trace!("Beginning collection");
-        // We want to get a snapshot of what the handles and the data look like
-        let data_snapshot: HashMap<GcDataPtr, Arc<Lockout>> = gc_data.data.clone();
-        let handle_snapshot: HashMap<GcInternalHandle, (GcDataPtr, Arc<Lockout>)> =
-            gc_data.handles.clone();
 
-        let mut scanables: Vec<(GcInternalHandle, &GcDataPtr, ExclusiveWarrant)> = Vec::new();
-        let mut unscanables: Vec<GcInternalHandle> = Vec::new();
-        for (handle, (data_ptr, lockout)) in &handle_snapshot {
-            if let Some(guard) = lockout.get_exclusive_warrant() {
-                scanables.push((handle.clone(), data_ptr, guard));
-            } else {
-                unscanables.push(handle.clone());
-            }
+        // First create a graph of all the data
+        let mut data_graph = HashMap::with_capacity(gc_data.data.len());
+        // At this point we can also create a "root" list, of handles outside the managed heap
+        let mut roots: HashSet<GcInternalHandle> = gc_data.handles.keys().cloned().collect();
+        // We need a coherent "moment in time", so we can't release any guard till the end of scanning
+        let mut warrants: Vec<ExclusiveWarrant> = Vec::with_capacity(gc_data.data.len());
+        for (gc_data_ptr, lockout) in &gc_data.data {
+            data_graph.insert(
+                gc_data_ptr.clone(),
+                if let Some(warrant) = lockout.get_exclusive_warrant() {
+                    warrants.push(warrant);
+
+                    let handles_for_data = gc_data_ptr.scan();
+                    for h in &handles_for_data {
+                        roots.remove(h);
+                    }
+
+                    handles_for_data
+                } else {
+                    Vec::new()
+                },
+            );
         }
+        let handle_data_mapping: HashMap<GcInternalHandle, GcDataPtr> = gc_data
+            .handles
+            .iter()
+            .map(|(handle, (data, _))| (handle.clone(), *data))
+            .collect();
+
+        // Now we drop the `gc_data` lock, and operate on "old data"
+        // Intuition: If data was unreachable then, it's unreachable now
         drop(gc_data);
 
-        // Note: We now are operating on an old copy of the data. However, that's okay
-        // Intuition: If data was unreachable then, it's unreachable now
-
-        // Now do scan, since we'll need that information
-        let mut roots: HashSet<GcInternalHandle> = handle_snapshot.keys().cloned().collect();
-        let mut scan_results: HashMap<GcInternalHandle, Vec<GcInternalHandle>> = HashMap::new();
-        for (handle, &data_ptr, _) in &scanables {
-            let mut scanner = Scanner::new();
-            let to_scan = unsafe { &*data_ptr.0 };
-            to_scan.scan(&mut scanner);
-
-            let results = scanner.extract_found_handles();
-            for h in &results {
-                roots.remove(h);
-            }
-
-            scan_results.insert(handle.clone(), results);
-        }
-        drop(scanables);
-        // If something couldn't be scanned, it must be in use
-        roots.extend(unscanables.into_iter());
-
-        // Now let's basically do DFS
-        let mut frontier_stack: Vec<GcInternalHandle> = Vec::from_iter(roots.iter().cloned());
-        let mut marked_data: HashSet<GcDataPtr> = roots
-            .iter()
-            .map(|k| {
-                handle_snapshot
-                    .get(k)
-                    .expect("We got the roots from this snapshot!")
-                    .0
-            })
+        // During scanning we need data about which handles are reachable
+        let mut handle_reachable: HashMap<GcInternalHandle, bool> = handle_data_mapping
+            .keys()
+            .map(|v| (v.clone(), roots.contains(v)))
             .collect();
-        let mut marked_handles = roots;
 
-        let empty_vec = Vec::new();
-        while let Some(handle) = frontier_stack.pop() {
-            // Now mark all data
-            for h in scan_results.get(&handle).unwrap_or(&empty_vec) {
-                // If we haven't marked this yet, we need to add it frontier
-                if !marked_handles.contains(h) {
-                    frontier_stack.push(h.clone());
+        // Now perform DFS on the handles in order to populate the "handle_reachable" data correctly
+        let mut dfs_queue: Vec<GcInternalHandle> = roots.into_iter().collect();
+        while let Some(handle) = dfs_queue.pop() {
+            let data = handle_data_mapping
+                .get(&handle)
+                .expect("All handles must have data");
+            let adj = data_graph.get(data).expect("All data must be in graph");
 
-                    let v = handle_snapshot
-                        .get(h)
-                        .expect("We got the handles from this snapshot!")
-                        .0;
-                    marked_data.insert(v);
-                    marked_handles.insert(h.clone());
+            for neighbor in adj {
+                // If the handle was not yet marked as reachable
+                if !handle_reachable.get(neighbor).cloned().unwrap_or(false) {
+                    // Mark as reachable
+                    handle_reachable.insert(neighbor.clone(), true);
+                    // Add to queue
+                    dfs_queue.push(neighbor.clone());
                 }
             }
         }
 
-        let unreachable_handles: HashSet<GcInternalHandle> = handle_snapshot
-            .keys()
-            .filter(|&v| !marked_handles.contains(v))
-            .cloned()
-            .collect();
-
-        let unreachable_data: HashSet<GcDataPtr> = data_snapshot
-            .keys()
-            .filter(|&v| !marked_data.contains(v))
-            .cloned()
-            .collect();
-
-        let mut gc_data = self.gc_data.write();
-        for h in &unreachable_handles {
-            gc_data.handles.remove(h);
+        // Now we know which handles are unreachable. Use that to calculate what data is unreachable
+        let mut data_reachable: HashMap<GcDataPtr, bool> =
+            data_graph.keys().map(|data| (*data, false)).collect();
+        for (handle, &reachable) in &handle_reachable {
+            if reachable {
+                let data = handle_data_mapping
+                    .get(handle)
+                    .expect("All handles must have data");
+                data_reachable.insert(data.clone(), true);
+            }
         }
 
+        // Now cleanup unreachable data
+        let mut gc_data = self.gc_data.write();
         let drop_thread_chan = self.drop_thread_chan.lock();
-        for d in &unreachable_data {
-            if let Some((ptr, _)) = gc_data.data.remove_entry(d) {
-                drop_thread_chan
-                    .send(ptr)
-                    .expect("drop thread should be infallible");
+
+        for (handle, reachable) in handle_reachable {
+            if !reachable {
+                gc_data.handles.remove(&handle);
+            }
+        }
+
+        for (ptr, reachable) in data_reachable {
+            if !reachable {
+                gc_data.data.remove(&ptr);
+                if let Err(e) = drop_thread_chan.send(ptr) {
+                    error!("Error sending to drop thread {}", e);
+                }
             }
         }
         drop(gc_data);
