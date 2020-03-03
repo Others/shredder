@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::collector::GcInternalHandle;
@@ -281,6 +281,19 @@ unsafe impl<T: Scan> Scan for Mutex<T> {
     }
 }
 unsafe impl<T: Scan> GcSafe for Mutex<T> {}
+
+unsafe impl<T: Scan> Scan for RwLock<T> {
+    fn scan(&self, scanner: &mut Scanner) {
+        // TODO(issue): https://github.com/Others/shredder/issues/6
+
+        // It's okay if we can't scan for now -- if the mutex is locked everything below is still in use
+        if let Ok(data) = self.try_read() {
+            let raw: &T = data.deref();
+            scanner.scan(raw);
+        }
+    }
+}
+unsafe impl<T: Scan> GcSafe for RwLock<T> {}
 
 // Primitives do not hold any Gc<T>s
 impl_empty_scan_for_send_type!(isize);

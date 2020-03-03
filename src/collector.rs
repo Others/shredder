@@ -222,11 +222,6 @@ impl Collector {
         lockout.get_warrant()
     }
 
-    pub fn handle_valid(&self, handle: &GcInternalHandle) -> bool {
-        let gc_data = self.gc_data.read();
-        gc_data.handles.get(handle).is_some()
-    }
-
     pub fn tracked_data_count(&self) -> usize {
         let gc_data = self.gc_data.read();
         gc_data.data.len()
@@ -279,8 +274,9 @@ impl Collector {
         let mut data_graph = HashMap::with_capacity(gc_data.data.len());
         // At this point we can also create a "root" list, of handles outside the managed heap
         let mut roots: HashSet<GcInternalHandle> = gc_data.handles.keys().cloned().collect();
-        // We need a coherent "moment in time", so we can't release any guard till the end of scanning
-        let mut warrants: Vec<ExclusiveWarrant> = Vec::with_capacity(gc_data.data.len());
+        // But we must maintain lockout warrants when we get them
+        let mut warrants: Vec<ExclusiveWarrant> = Vec::new();
+
         for (gc_data_ptr, lockout) in &gc_data.data {
             data_graph.insert(
                 gc_data_ptr.clone(),

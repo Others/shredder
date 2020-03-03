@@ -47,13 +47,19 @@ mod lockout;
 mod scan;
 mod smart_ptr;
 
+use std::cell::RefCell;
+use std::sync::Mutex;
+
 use collector::COLLECTOR;
 
 pub use scan::{GcSafe, GcSafeWrapper, Scan, Scanner};
-pub use smart_ptr::{Gc, GcGuard};
+pub use smart_ptr::{Gc, GcGuard, GcRef, GcRefMut};
 
 // Re-export the Scan derive
 pub use shredder_derive::Scan;
+
+pub type GRef<T> = Gc<RefCell<T>>;
+pub type GMutex<T> = Gc<Mutex<T>>;
 
 /// Returns how many underlying allocations are currently allocated
 ///

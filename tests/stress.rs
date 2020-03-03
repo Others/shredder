@@ -18,7 +18,7 @@ const SHRINK_DIV: usize = 1 << 13;
 
 #[test]
 fn stress_test() {
-    eprintln!("Creating nodes...");
+    println!("Creating nodes...");
     let mut nodes = Vec::new();
 
     for i in 0..=NODE_COUNT {
@@ -28,7 +28,7 @@ fn stress_test() {
         })));
     }
 
-    eprintln!("Adding edges...");
+    println!("Adding edges...");
     let mut rng = StdRng::seed_from_u64(0xCAFE);
     for _ in 0..=EDGE_COUNT {
         let a = nodes.choose(&mut rng).unwrap();
@@ -37,7 +37,7 @@ fn stress_test() {
         a.borrow_mut().edges.push(Gc::clone(b));
     }
 
-    eprintln!("Doing the shrink...");
+    println!("Doing the shrink...");
     for i in 0..NODE_COUNT {
         if i % SHRINK_DIV == 0 {
             nodes.truncate(NODE_COUNT - i);
