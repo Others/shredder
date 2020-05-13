@@ -3,3 +3,5 @@ error[E0277]: the trait bound `NotScan: shredder::Scan` is not satisfied
   |
 6 | #[derive(Scan)]
   |          ^^^^ the trait `shredder::Scan` is not implemented for `NotScan`
+  |
+  = note: this error originates in a derive macro (in Nightly builds, run with -Z macro-backtrace for more info)

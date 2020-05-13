@@ -62,13 +62,11 @@ impl GcDataPtr {
         dealloc(heap_ptr, dealloc_layout);
     }
 
-    fn scan(&self) -> Vec<GcInternalHandle> {
+    fn scan<F: FnMut(GcInternalHandle)>(&self, callback: F) {
         unsafe {
-            let mut scanner = Scanner::new();
+            let mut scanner = Scanner::new(callback);
             let to_scan = &*self.0;
             to_scan.scan(&mut scanner);
-
-            scanner.extract_found_handles()
         }
     }
 }
@@ -283,10 +281,11 @@ impl Collector {
                 if let Some(warrant) = lockout.get_exclusive_warrant() {
                     warrants.push(warrant);
 
-                    let handles_for_data = gc_data_ptr.scan();
-                    for h in &handles_for_data {
-                        roots.remove(h);
-                    }
+                    let mut handles_for_data = Vec::new();
+                    gc_data_ptr.scan(|h| {
+                        roots.remove(&h);
+                        handles_for_data.push(h);
+                    });
 
                     handles_for_data
                 } else {

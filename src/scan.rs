@@ -93,17 +93,17 @@ pub unsafe trait GcSafe {}
 
 /// Scanner is a struct used to manage the scanning of data, sort of analogous to `Hasher`
 /// Usually you will only care about this while implementing `Scan`
-#[derive(Debug, Default)]
-pub struct Scanner {
-    found: Vec<GcInternalHandle>,
+pub struct Scanner<'a> {
+    scan_callback: Box<dyn FnMut(GcInternalHandle) + 'a>,
 }
 
 #[allow(clippy::unused_self)]
-impl Scanner {
-    /// Create a new Scanner, with nothing found yet
+impl<'a> Scanner<'a> {
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new<F: FnMut(GcInternalHandle) + 'a>(callback: F) -> Self {
+        Self {
+            scan_callback: Box::new(callback)
+        }
     }
 
     /// Scan a piece of data, tracking any `Gc`s found
@@ -117,11 +117,7 @@ impl Scanner {
     pub fn check_gc_safe<T: GcSafe>(&self, _: &T) {}
 
     fn add_internal_handle<T: Scan>(&mut self, gc: &Gc<T>) {
-        self.found.push(gc.internal_handle())
-    }
-
-    pub(crate) fn extract_found_handles(self) -> Vec<GcInternalHandle> {
-        self.found
+        (self.scan_callback)(gc.internal_handle());
     }
 }
 
@@ -339,7 +335,7 @@ mod test {
     unsafe impl GcSafe for MockGc {}
     unsafe impl Scan for MockGc {
         fn scan(&self, scanner: &mut Scanner) {
-            scanner.found.push(self.handle.clone())
+            (scanner.scan_callback)(self.handle.clone());
         }
     }
 
@@ -350,8 +346,12 @@ mod test {
             handle: GcInternalHandle::new(0),
         });
 
-        let mut scanner = Scanner::new();
+        let mut count = 0;
+        let mut scanner = Scanner::new(|_| {
+            count += 1;
+        });
         scanner.scan(&v);
-        assert_eq!(scanner.found.len(), 1);
+        drop(scanner);
+        assert_eq!(count, 1);
     }
 }
