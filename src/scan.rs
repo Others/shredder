@@ -103,7 +103,7 @@ impl<'a> Scanner<'a> {
     #[must_use]
     pub fn new<F: FnMut(GcInternalHandle) + 'a>(callback: F) -> Self {
         Self {
-            scan_callback: Box::new(callback)
+            scan_callback: Box::new(callback),
         }
     }
 

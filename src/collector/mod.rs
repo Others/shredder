@@ -1,75 +1,20 @@
-use std::alloc::{alloc, dealloc, Layout};
+mod alloc;
+mod trigger;
+
 use std::collections::HashMap;
-use std::mem::ManuallyDrop;
-use std::panic::{catch_unwind, UnwindSafe};
-use std::ptr;
+use std::panic::catch_unwind;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::spawn;
 
 use once_cell::sync::Lazy;
-use parking_lot::{Mutex, MutexGuard, RwLock, RwLockWriteGuard, RwLockUpgradableReadGuard};
+use parking_lot::{Mutex, MutexGuard, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 
+use crate::collector::alloc::TrackedData;
+use crate::collector::trigger::TriggerData;
 use crate::lockout::{ExclusiveWarrant, Lockout, Warrant};
-use crate::{Scan, Scanner};
-
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-pub struct GcDataPtr(*const dyn Scan);
-
-// We need this for the drop thread. By that point we have exclusive access to the data
-// It also, by contract of Scan, cannot have a Drop method that is unsafe in any thead
-unsafe impl Send for GcDataPtr {}
-// Therefore, GcDataPtr is also UnwindSafe in the context we need it to be
-impl UnwindSafe for GcDataPtr {}
-// We use the lockout to ensure that `GcDataPtr`s are not shared
-unsafe impl Sync for GcDataPtr {}
-
-impl GcDataPtr {
-    fn allocate<T: Scan + 'static>(v: T) -> (Self, *const T) {
-        // This is a straightforward use of alloc/write -- it should be undef free
-        let data_ptr = unsafe {
-            let heap_space = alloc(Layout::new::<T>()) as *mut T;
-            ptr::write(heap_space, v);
-            // NOTE: Write moves the data into the heap
-
-            // Heap space is now a pointer to a T
-            heap_space as *const T
-        };
-
-        let fat_ptr: *const dyn Scan = data_ptr;
-
-        (Self(fat_ptr), data_ptr)
-    }
-
-    // This is unsafe, since we must externally guarantee that no-one still holds a pointer to the data
-    // (Luckily this is the point of the garbage collector!)
-    unsafe fn deallocate(self) {
-        let scan_ptr: *const dyn Scan = self.0;
-
-        // This calls the destructor of the Scan data
-        {
-            // Safe type shift: the contract of this method is that the scan_ptr doesn't alias
-            // + ManuallyDrop is repr(transparent)
-            let droppable_ptr: *mut ManuallyDrop<dyn Scan> =
-                scan_ptr as *mut ManuallyDrop<dyn Scan>;
-            let droppable_ref = &mut *droppable_ptr;
-            ManuallyDrop::drop(droppable_ref);
-        }
-
-        let dealloc_layout = Layout::for_value(&*scan_ptr);
-        let heap_ptr = scan_ptr as *mut u8;
-        dealloc(heap_ptr, dealloc_layout);
-    }
-
-    fn scan<F: FnMut(GcInternalHandle)>(&self, callback: F) {
-        unsafe {
-            let mut scanner = Scanner::new(callback);
-            let to_scan = &*self.0;
-            to_scan.scan(&mut scanner);
-        }
-    }
-}
+use crate::Scan;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct GcInternalHandle(u64);
@@ -79,10 +24,19 @@ impl GcInternalHandle {
     }
 }
 
-struct TriggerData {
-    // Percent more allocations needed to trigger garbage collection
-    gc_trigger_percent: f32,
-    data_count_at_last_collection: usize,
+pub struct Collector {
+    handle_idx_count: AtomicU64,
+    trigger_data: Mutex<TriggerData>,
+    drop_thread_chan: Mutex<Sender<TrackedData>>,
+    async_gc_chan: Mutex<Sender<()>>,
+    gc_data: RwLock<TrackedGcData>,
+}
+
+#[derive(Debug)]
+struct TrackedGcData {
+    collection_number: u64,
+    data: HashMap<TrackedData, GcMetadata>,
+    handles: HashMap<GcInternalHandle, HandleMetadata>,
 }
 
 #[derive(Debug)]
@@ -93,35 +47,16 @@ struct GcMetadata {
 
 #[derive(Debug)]
 struct HandleMetadata {
-    underlying_ptr: GcDataPtr,
+    underlying_ptr: TrackedData,
     lockout: Arc<Lockout>,
     last_non_rooted: u64,
 }
-
-#[derive(Debug)]
-struct TrackedGcData {
-    collection_number: u64,
-    data: HashMap<GcDataPtr, GcMetadata>,
-    handles: HashMap<GcInternalHandle, HandleMetadata>,
-}
-
-pub struct Collector {
-    handle_idx_count: AtomicU64,
-    trigger_data: Mutex<TriggerData>,
-    drop_thread_chan: Mutex<Sender<GcDataPtr>>,
-    async_gc_chan: Mutex<Sender<()>>,
-    gc_data: RwLock<TrackedGcData>,
-}
-
-// TODO(issue): https://github.com/Others/shredder/issues/8
-const DEFAULT_TRIGGER_PERCENT: f32 = 0.75;
-const MIN_ALLOCATIONS_FOR_COLLECTION: f32 = 512.0 * 1.3;
 
 // TODO(issue): https://github.com/Others/shredder/issues/7
 
 impl Collector {
     fn new() -> Arc<Self> {
-        let (drop_sender, drop_receiver) = mpsc::channel::<GcDataPtr>();
+        let (drop_sender, drop_receiver) = mpsc::channel::<TrackedData>();
 
         // The drop thread deals with doing all the Drops this collector needs to do
         spawn(move || {
@@ -141,10 +76,7 @@ impl Collector {
 
         let res = Arc::new(Self {
             handle_idx_count: AtomicU64::new(1),
-            trigger_data: Mutex::new(TriggerData {
-                gc_trigger_percent: DEFAULT_TRIGGER_PERCENT,
-                data_count_at_last_collection: 0,
-            }),
+            trigger_data: Mutex::default(),
             async_gc_chan: Mutex::new(async_gc_trigger),
             drop_thread_chan: Mutex::new(drop_sender),
             gc_data: RwLock::new(TrackedGcData {
@@ -174,23 +106,27 @@ impl Collector {
     }
 
     pub fn track_data<T: Scan + 'static>(&self, data: T) -> (GcInternalHandle, *const T) {
-        let (gc_data_ptr, heap_ptr) = GcDataPtr::allocate(data);
+        let (gc_data_ptr, heap_ptr) = TrackedData::allocate(data);
         let handle = self.synthesize_handle();
         let lockout = Lockout::new();
 
         let mut gc_data = self.gc_data.write();
-        gc_data.data.insert(gc_data_ptr, GcMetadata {
-            lockout: lockout.clone(),
-            last_marked: 0
-        });
+        gc_data.data.insert(
+            gc_data_ptr,
+            GcMetadata {
+                lockout: lockout.clone(),
+                last_marked: 0,
+            },
+        );
         assert!(!gc_data.handles.contains_key(&handle));
-        gc_data
-            .handles
-            .insert(handle.clone(), HandleMetadata{
+        gc_data.handles.insert(
+            handle.clone(),
+            HandleMetadata {
                 underlying_ptr: gc_data_ptr,
                 lockout,
-                last_non_rooted: 0
-            });
+                last_non_rooted: 0,
+            },
+        );
         drop(gc_data);
 
         let res = (handle, heap_ptr);
@@ -222,17 +158,15 @@ impl Collector {
                 .handles
                 .get(handle)
                 .expect("Tried to clone a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
-            HandleMetadata{
+            HandleMetadata {
                 underlying_ptr: handle_metadata.underlying_ptr,
                 lockout: handle_metadata.lockout.clone(),
-                last_non_rooted: 0
+                last_non_rooted: 0,
             }
         };
 
         let new_handle = self.synthesize_handle();
-        gc_data
-            .handles
-            .insert(new_handle.clone(), new_metadata);
+        gc_data.handles.insert(new_handle.clone(), new_metadata);
 
         new_handle
     }
@@ -258,23 +192,16 @@ impl Collector {
     }
 
     pub fn set_gc_trigger_percent(&self, new_trigger_percent: f32) {
-        self.trigger_data.lock().gc_trigger_percent = new_trigger_percent;
+        self.trigger_data
+            .lock()
+            .set_trigger_percent(new_trigger_percent);
     }
 
     pub fn check_then_collect(&self) -> bool {
-        let trigger_data = self.trigger_data.lock();
+        let trigger = self.trigger_data.lock();
         let gc_data = self.gc_data.upgradable_read();
-
-        let tracked_data_count = gc_data.data.len();
-        let new_data_count = tracked_data_count - trigger_data.data_count_at_last_collection;
-        let percent_more_data =
-            new_data_count as f32 / trigger_data.data_count_at_last_collection as f32;
-
-        let at_min_allocations = tracked_data_count as f32 > MIN_ALLOCATIONS_FOR_COLLECTION;
-        let infinite_percent_extra_data = !percent_more_data.is_finite();
-        let above_trigger_percent = percent_more_data >= trigger_data.gc_trigger_percent;
-        if at_min_allocations && (infinite_percent_extra_data || above_trigger_percent) {
-            self.do_collect(trigger_data, RwLockUpgradableReadGuard::upgrade(gc_data));
+        if trigger.should_collect(gc_data.data.len()) {
+            self.do_collect(trigger, RwLockUpgradableReadGuard::upgrade(gc_data));
             true
         } else {
             false
@@ -301,7 +228,7 @@ impl Collector {
         gc_data_guard.collection_number += 1;
         let current_collection = gc_data_guard.collection_number;
 
-        // The warrant system prevents us from
+        // The warrant system prevents us from scanning in-use data
         let mut warrants: Vec<ExclusiveWarrant> = Vec::new();
 
         let gc_data = &mut *gc_data_guard;
@@ -318,7 +245,9 @@ impl Collector {
 
                 // Now figure out what handles are not rooted
                 gc_data_ptr.scan(|h| {
-                    let found_handle_metadata = tracked_handles.get_mut(&h).expect("should always find a handle if it's present in data");
+                    let found_handle_metadata = tracked_handles
+                        .get_mut(&h)
+                        .expect("should always find a handle if it's present in data");
                     found_handle_metadata.last_non_rooted = current_collection;
                 });
             } else {
@@ -342,14 +271,18 @@ impl Collector {
         let mut dfs_stack = roots;
         while let Some((_, handle_metadata)) = dfs_stack.pop() {
             let data_ptr = &handle_metadata.underlying_ptr;
-            let ptr_metadata = tracked_data.get_mut(data_ptr).expect("all data must have associated metadata");
+            let ptr_metadata = tracked_data
+                .get_mut(data_ptr)
+                .expect("all data must have associated metadata");
 
             // Essential note! Since all non warranted data is automatically marked, we will never accidently scan non-warranted data here
             if ptr_metadata.last_marked != current_collection {
                 ptr_metadata.last_marked = current_collection;
 
                 data_ptr.scan(|h| {
-                    let metadata = tracked_handles.get(&h).expect("all handles must have metadata");
+                    let metadata = tracked_handles
+                        .get(&h)
+                        .expect("all handles must have metadata");
                     dfs_stack.push((h, metadata));
                 });
             }
@@ -383,7 +316,7 @@ impl Collector {
         });
         drop(gc_data_guard);
 
-        trigger_data.data_count_at_last_collection = self.tracked_data_count();
+        trigger_data.set_data_count_after_collection(self.tracked_data_count());
 
         trace!("Collection finished");
     }
