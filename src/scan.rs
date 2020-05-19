@@ -85,6 +85,7 @@ pub unsafe trait Scan: GcSafe {
 /// 1) It's okay for any thread to call `scan`, as long as it has exclusive access to the data
 /// 2) Any thread can drop the data safely
 /// Requirement (1) can be relaxed if you can ensure that the type does not implement `Scan`
+/// (A negative impl can be used to ensure this constraint.)
 ///
 /// Importantly if a type is Send, then it is always `GcSafe`
 ///

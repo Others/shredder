@@ -149,7 +149,7 @@ impl<T: Scan + 'static> Gc<RefCell<T>> {
     pub fn try_borrow(&self) -> Result<GcRef<T>, BorrowError> {
         let g = self.get();
         let internal_ref =
-            gc_refcell_internals::GcRefInt::try_new(g, |g| g.try_borrow()).map_err(|e| e.0)?;
+            gc_refcell_internals::GcRefInt::try_new(g, RefCell::try_borrow).map_err(|e| e.0)?;
 
         Ok(GcRef { internal_ref })
     }
@@ -172,7 +172,7 @@ impl<T: Scan + 'static> Gc<RefCell<T>> {
     /// Propagates a `BorrowError` if the underlying `RefCell` is already borrowed
     pub fn try_borrow_mut(&self) -> Result<GcRefMut<T>, BorrowMutError> {
         let g = self.get();
-        let internal_ref = gc_refcell_internals::GcRefMutInt::try_new(g, |g| g.try_borrow_mut())
+        let internal_ref = gc_refcell_internals::GcRefMutInt::try_new(g, RefCell::try_borrow_mut)
             .map_err(|e| e.0)?;
 
         Ok(GcRefMut { internal_ref })

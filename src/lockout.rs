@@ -107,7 +107,7 @@ impl Drop for ExclusiveWarrant {
             self.lockout
                 .count
                 .compare_and_swap(EXCLUSIVE_SIGNPOST, 0, Ordering::SeqCst);
-        assert!(prev_count == EXCLUSIVE_SIGNPOST);
+        assert_eq!(prev_count, EXCLUSIVE_SIGNPOST);
         self.lockout.lockout_condvar.notify_all();
     }
 }

@@ -118,36 +118,37 @@ struct Connection {
 #[test]
 fn scan_skip_problem() {
     let _guard = TEST_MUTEX.lock();
-
-    assert_eq!(number_of_tracked_allocations(), 0);
-    let root_con = Gc::new(sync::Mutex::new(Connection::default()));
-    eprintln!("root {:?}", root_con);
-
-    // FIXME: Use shortcut methods here
-    let hidden = Gc::new(sync::Mutex::new(Connection::default()));
-    eprintln!("hidden {:?}", hidden);
-    let hider = Gc::new(sync::Mutex::new(Connection::default()));
-    eprintln!("hider {:?}", hider);
     {
-        let hiden_clone_1 = hidden.clone();
-        eprintln!("hidden clone 1 {:?}", hiden_clone_1);
-        root_con.lock().unwrap().connect = Some(hiden_clone_1);
-        let hiden_clone_2 = hidden.clone();
-        eprintln!("hidden clone 2 {:?}", hiden_clone_2);
-        hider.lock().unwrap().connect = Some(hiden_clone_2);
+        assert_eq!(number_of_tracked_allocations(), 0);
+        let root_con = Gc::new(sync::Mutex::new(Connection::default()));
+        eprintln!("root {:?}", root_con);
+
+        // FIXME: Use shortcut methods here
+        let hidden = Gc::new(sync::Mutex::new(Connection::default()));
+        eprintln!("hidden {:?}", hidden);
+        let hider = Gc::new(sync::Mutex::new(Connection::default()));
+        eprintln!("hider {:?}", hider);
+        {
+            let hiden_clone_1 = hidden.clone();
+            eprintln!("hidden clone 1 {:?}", hiden_clone_1);
+            root_con.lock().unwrap().connect = Some(hiden_clone_1);
+            let hiden_clone_2 = hidden.clone();
+            eprintln!("hidden clone 2 {:?}", hiden_clone_2);
+            hider.lock().unwrap().connect = Some(hiden_clone_2);
+        }
+        drop(hidden);
+        drop(hider);
+
+        let root_gc_guard = root_con.get();
+        let root_blocker = root_gc_guard.lock().unwrap();
+        collect();
+        assert_eq!(number_of_tracked_allocations(), 2);
+
+        drop(root_blocker);
+        drop(root_gc_guard);
+        drop(root_con);
     }
-    drop(hidden);
-    drop(hider);
-
-    let root_gc_guard = root_con.get();
-    let root_blocker = root_gc_guard.lock().unwrap();
     collect();
-    assert_eq!(number_of_tracked_allocations(), 2);
-
-    drop(root_blocker);
-    // TODO: Figure out why we need this drop -- seems that dropping `root_con` would be enough
-    drop(root_gc_guard);
-    drop(root_con);
     collect();
     assert_eq!(number_of_tracked_allocations(), 0);
 }

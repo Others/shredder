@@ -1,5 +1,5 @@
 use std::alloc::{alloc, dealloc, Layout};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::panic::{catch_unwind, UnwindSafe};
 use std::ptr;
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread::spawn;
 
 use once_cell::sync::Lazy;
-use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
+use parking_lot::{Mutex, MutexGuard, RwLock, RwLockWriteGuard, RwLockUpgradableReadGuard};
 
 use crate::lockout::{ExclusiveWarrant, Lockout, Warrant};
 use crate::{Scan, Scanner};
@@ -85,9 +85,24 @@ struct TriggerData {
     data_count_at_last_collection: usize,
 }
 
+#[derive(Debug)]
+struct GcMetadata {
+    lockout: Arc<Lockout>,
+    last_marked: u64,
+}
+
+#[derive(Debug)]
+struct HandleMetadata {
+    underlying_ptr: GcDataPtr,
+    lockout: Arc<Lockout>,
+    last_non_rooted: u64,
+}
+
+#[derive(Debug)]
 struct TrackedGcData {
-    data: HashMap<GcDataPtr, Arc<Lockout>>,
-    handles: HashMap<GcInternalHandle, (GcDataPtr, Arc<Lockout>)>,
+    collection_number: u64,
+    data: HashMap<GcDataPtr, GcMetadata>,
+    handles: HashMap<GcInternalHandle, HandleMetadata>,
 }
 
 pub struct Collector {
@@ -133,6 +148,7 @@ impl Collector {
             async_gc_chan: Mutex::new(async_gc_trigger),
             drop_thread_chan: Mutex::new(drop_sender),
             gc_data: RwLock::new(TrackedGcData {
+                collection_number: 1,
                 data: HashMap::new(),
                 handles: HashMap::new(),
             }),
@@ -163,11 +179,18 @@ impl Collector {
         let lockout = Lockout::new();
 
         let mut gc_data = self.gc_data.write();
-        gc_data.data.insert(gc_data_ptr, lockout.clone());
+        gc_data.data.insert(gc_data_ptr, GcMetadata {
+            lockout: lockout.clone(),
+            last_marked: 0
+        });
         assert!(!gc_data.handles.contains_key(&handle));
         gc_data
             .handles
-            .insert(handle.clone(), (gc_data_ptr, lockout));
+            .insert(handle.clone(), HandleMetadata{
+                underlying_ptr: gc_data_ptr,
+                lockout,
+                last_non_rooted: 0
+            });
         drop(gc_data);
 
         let res = (handle, heap_ptr);
@@ -176,7 +199,7 @@ impl Collector {
         self.async_gc_chan
             .lock()
             .send(())
-            .expect("We should always be able to");
+            .expect("notifying the async gc thread should always succeed");
 
         res
     }
@@ -194,18 +217,22 @@ impl Collector {
         // Note: On panic, the lock is freed normally -- which is what we want
         let mut gc_data = self.gc_data.write();
 
-        let (data_ptr, data_lock) = gc_data
-            .handles
-            .get(handle)
-            .expect("Tried to clone a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
-
-        let data_ptr = *data_ptr;
-        let data_lock = data_lock.clone();
+        let new_metadata = {
+            let handle_metadata = gc_data
+                .handles
+                .get(handle)
+                .expect("Tried to clone a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
+            HandleMetadata{
+                underlying_ptr: handle_metadata.underlying_ptr,
+                lockout: handle_metadata.lockout.clone(),
+                last_non_rooted: 0
+            }
+        };
 
         let new_handle = self.synthesize_handle();
         gc_data
             .handles
-            .insert(new_handle.clone(), (data_ptr, data_lock));
+            .insert(new_handle.clone(), new_metadata);
 
         new_handle
     }
@@ -214,10 +241,10 @@ impl Collector {
         // Note: On panic, the lock is freed normally -- which is what we want
         let gc_data = self.gc_data.read();
 
-        let (_, lockout) = gc_data.handles.get(handle)
+        let handle_metadata = gc_data.handles.get(handle)
             .expect("Tried to access Gc data, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
 
-        lockout.get_warrant()
+        handle_metadata.lockout.get_warrant()
     }
 
     pub fn tracked_data_count(&self) -> usize {
@@ -236,7 +263,7 @@ impl Collector {
 
     pub fn check_then_collect(&self) -> bool {
         let trigger_data = self.trigger_data.lock();
-        let gc_data = self.gc_data.read();
+        let gc_data = self.gc_data.upgradable_read();
 
         let tracked_data_count = gc_data.data.len();
         let new_data_count = tracked_data_count - trigger_data.data_count_at_last_collection;
@@ -247,7 +274,7 @@ impl Collector {
         let infinite_percent_extra_data = !percent_more_data.is_finite();
         let above_trigger_percent = percent_more_data >= trigger_data.gc_trigger_percent;
         if at_min_allocations && (infinite_percent_extra_data || above_trigger_percent) {
-            self.do_collect(trigger_data, gc_data);
+            self.do_collect(trigger_data, RwLockUpgradableReadGuard::upgrade(gc_data));
             true
         } else {
             false
@@ -256,109 +283,105 @@ impl Collector {
 
     pub fn collect(&self) {
         let trigger_data = self.trigger_data.lock();
-        let gc_data = self.gc_data.read();
+        let gc_data = self.gc_data.write();
         self.do_collect(trigger_data, gc_data);
     }
 
     // TODO(issue): https://github.com/Others/shredder/issues/13
+    // TODO: Remove the vectors we allocate here with an intrusive linked list
+    // TODO: Reconsider the lockout mechanism (is the memory usage too high?)
+    #[allow(clippy::shadow_unrelated)]
     fn do_collect(
         &self,
         mut trigger_data: MutexGuard<TriggerData>,
-        gc_data: RwLockReadGuard<TrackedGcData>,
+        mut gc_data_guard: RwLockWriteGuard<TrackedGcData>,
     ) {
         trace!("Beginning collection");
 
-        // First create a graph of all the data
-        let mut data_graph = HashMap::with_capacity(gc_data.data.len());
-        // At this point we can also create a "root" list, of handles outside the managed heap
-        let mut roots: HashSet<GcInternalHandle> = gc_data.handles.keys().cloned().collect();
-        // But we must maintain lockout warrants when we get them
+        gc_data_guard.collection_number += 1;
+        let current_collection = gc_data_guard.collection_number;
+
+        // The warrant system prevents us from
         let mut warrants: Vec<ExclusiveWarrant> = Vec::new();
 
-        for (gc_data_ptr, lockout) in &gc_data.data {
-            data_graph.insert(
-                gc_data_ptr.clone(),
-                if let Some(warrant) = lockout.get_exclusive_warrant() {
-                    warrants.push(warrant);
+        let gc_data = &mut *gc_data_guard;
+        let tracked_data = &mut gc_data.data;
+        let tracked_handles = &mut gc_data.handles;
 
-                    let mut handles_for_data = Vec::new();
-                    gc_data_ptr.scan(|h| {
-                        roots.remove(&h);
-                        handles_for_data.push(h);
-                    });
+        // eprintln!("tracked data {:?}", tracked_data);
+        // eprintln!("tracked handles {:?}", tracked_handles);
 
-                    handles_for_data
-                } else {
-                    Vec::new()
-                },
-            );
-        }
-        let handle_data_mapping: HashMap<GcInternalHandle, GcDataPtr> = gc_data
-            .handles
-            .iter()
-            .map(|(handle, (data, _))| (handle.clone(), *data))
-            .collect();
+        for (gc_data_ptr, metadata) in &mut *tracked_data {
+            if let Some(warrant) = metadata.lockout.get_exclusive_warrant() {
+                // Save that warrant so things can't shift around under us
+                warrants.push(warrant);
 
-        // Now we drop the `gc_data` lock, and operate on "old data"
-        // Intuition: If data was unreachable then, it's unreachable now
-        drop(gc_data);
-
-        // During scanning we need data about which handles are reachable
-        let mut handle_reachable: HashMap<GcInternalHandle, bool> = handle_data_mapping
-            .keys()
-            .map(|v| (v.clone(), roots.contains(v)))
-            .collect();
-
-        // Now perform DFS on the handles in order to populate the "handle_reachable" data correctly
-        let mut dfs_queue: Vec<GcInternalHandle> = roots.into_iter().collect();
-        while let Some(handle) = dfs_queue.pop() {
-            let data = handle_data_mapping
-                .get(&handle)
-                .expect("All handles must have data");
-            let adj = data_graph.get(data).expect("All data must be in graph");
-
-            for neighbor in adj {
-                // If the handle was not yet marked as reachable
-                if !handle_reachable.get(neighbor).cloned().unwrap_or(false) {
-                    // Mark as reachable
-                    handle_reachable.insert(neighbor.clone(), true);
-                    // Add to queue
-                    dfs_queue.push(neighbor.clone());
-                }
+                // Now figure out what handles are not rooted
+                gc_data_ptr.scan(|h| {
+                    let found_handle_metadata = tracked_handles.get_mut(&h).expect("should always find a handle if it's present in data");
+                    found_handle_metadata.last_non_rooted = current_collection;
+                });
+            } else {
+                // eprintln!("failed to get warrant!");
+                // If we can't get the warrant, then this data must be in use, so we can mark it
+                metadata.last_marked = current_collection;
             }
         }
 
-        // Now we know which handles are unreachable. Use that to calculate what data is unreachable
-        let mut data_reachable: HashMap<GcDataPtr, bool> =
-            data_graph.keys().map(|data| (*data, false)).collect();
-        for (handle, &reachable) in &handle_reachable {
-            if reachable {
-                let data = handle_data_mapping
-                    .get(handle)
-                    .expect("All handles must have data");
-                data_reachable.insert(data.clone(), true);
+        let tracked_handles = &gc_data.handles;
+        let mut roots = Vec::new();
+        for (handle, handle_metadata) in tracked_handles {
+            // If the `last_non_rooted` number was not now, then it is a root
+            if handle_metadata.last_non_rooted != current_collection {
+                roots.push((handle.clone(), handle_metadata));
             }
         }
 
-        // Now cleanup unreachable data
-        let mut gc_data = self.gc_data.write();
+        // eprintln!("roots {:?}", roots);
+
+        let mut dfs_stack = roots;
+        while let Some((_, handle_metadata)) = dfs_stack.pop() {
+            let data_ptr = &handle_metadata.underlying_ptr;
+            let ptr_metadata = tracked_data.get_mut(data_ptr).expect("all data must have associated metadata");
+
+            // Essential note! Since all non warranted data is automatically marked, we will never accidently scan non-warranted data here
+            if ptr_metadata.last_marked != current_collection {
+                ptr_metadata.last_marked = current_collection;
+
+                data_ptr.scan(|h| {
+                    let metadata = tracked_handles.get(&h).expect("all handles must have metadata");
+                    dfs_stack.push((h, metadata));
+                });
+            }
+        }
+
+        let tracked_handles = &mut gc_data.handles;
         let drop_thread_chan = self.drop_thread_chan.lock();
+        tracked_data.retain(|data_ptr, ptr_metadata| {
+            // If this is true, we just marked this data
+            if ptr_metadata.last_marked == current_collection {
+                // so retain it
+                true
+            } else {
+                // eprintln!("deallocating {:?}", data_ptr);
 
-        for (handle, reachable) in handle_reachable {
-            if !reachable {
-                gc_data.handles.remove(&handle);
-            }
-        }
+                data_ptr.scan(|h| {
+                    tracked_handles.remove(&h);
+                });
 
-        for (ptr, reachable) in data_reachable {
-            if !reachable {
-                gc_data.data.remove(&ptr);
-                if let Err(e) = drop_thread_chan.send(ptr) {
+                // Otherwise set this data up to be deallocated
+                if let Err(e) = drop_thread_chan.send(data_ptr.clone()) {
                     error!("Error sending to drop thread {}", e);
                 }
+
+                // Note: It's okay to send all the data before we've completely removed it from the map
+                // The cross check will stall till we release the data lock
+
+                // Don't retain this data
+                false
             }
-        }
-        drop(gc_data);
+        });
+        drop(gc_data_guard);
 
         trigger_data.data_count_at_last_collection = self.tracked_data_count();
 
