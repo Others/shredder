@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::collector::GcInternalHandle;
+use crate::collector::InternalGcRef;
 use crate::Gc;
 
 /// `Scan` is the trait capturing the ability of data to be scanned for references to other Gc data.
@@ -95,13 +95,13 @@ pub unsafe trait GcSafe {}
 /// Scanner is a struct used to manage the scanning of data, sort of analogous to `Hasher`
 /// Usually you will only care about this while implementing `Scan`
 pub struct Scanner<'a> {
-    scan_callback: Box<dyn FnMut(GcInternalHandle) + 'a>,
+    scan_callback: Box<dyn FnMut(InternalGcRef) + 'a>,
 }
 
 #[allow(clippy::unused_self)]
 impl<'a> Scanner<'a> {
     #[must_use]
-    pub fn new<F: FnMut(GcInternalHandle) + 'a>(callback: F) -> Self {
+    pub fn new<F: FnMut(InternalGcRef) + 'a>(callback: F) -> Self {
         Self {
             scan_callback: Box::new(callback),
         }
@@ -327,11 +327,11 @@ unsafe impl<T: GcSafe> GcSafe for Arc<T> {}
 // TODO(issue): https://github.com/Others/shredder/issues/4
 #[cfg(test)]
 mod test {
-    use crate::collector::GcInternalHandle;
+    use crate::collector::{get_mock_handle, InternalGcRef};
     use crate::{GcSafe, Scan, Scanner};
 
     struct MockGc {
-        handle: GcInternalHandle,
+        handle: InternalGcRef,
     }
     unsafe impl GcSafe for MockGc {}
     unsafe impl Scan for MockGc {
@@ -344,7 +344,7 @@ mod test {
     fn vec_scans_correctly() {
         let mut v = Vec::new();
         v.push(MockGc {
-            handle: GcInternalHandle::new(0),
+            handle: get_mock_handle(),
         });
 
         let mut count = 0;

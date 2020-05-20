@@ -13,7 +13,6 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-#intrusive-collections = "0.9.0"
 log = "0.4.8"
 once_cell = "1.2"
 parking_lot = "0.10.0"
@@ -25,3 +24,6 @@ stable_deref_trait = "1.1"
 [dev-dependencies]
 rand = "0.7.3"
 trybuild = "1.0"
+
+#[profile.release]
+#debug = true

@@ -8,14 +8,14 @@ use std::sync;
 
 use stable_deref_trait::StableDeref;
 
-use crate::collector::{GcInternalHandle, COLLECTOR};
+use crate::collector::{InternalGcRef, COLLECTOR};
 use crate::lockout::Warrant;
 use crate::Scan;
 
 /// `Gc` is a smart-pointer for data tracked by `shredder` garbage collector
 #[derive(Debug)]
 pub struct Gc<T: Scan> {
-    backing_handle: GcInternalHandle,
+    backing_handle: InternalGcRef,
     direct_ptr: *const T,
 }
 
@@ -44,7 +44,7 @@ impl<T: Scan> Gc<T> {
         }
     }
 
-    pub(crate) fn internal_handle(&self) -> GcInternalHandle {
+    pub(crate) fn internal_handle(&self) -> InternalGcRef {
         self.backing_handle.clone()
     }
 }

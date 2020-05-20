@@ -3,21 +3,21 @@ use std::mem::ManuallyDrop;
 use std::panic::UnwindSafe;
 use std::ptr;
 
-use crate::collector::GcInternalHandle;
+use crate::collector::InternalGcRef;
 use crate::{Scan, Scanner};
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-pub struct TrackedData(*const dyn Scan);
+pub struct GcAllocation(*const dyn Scan);
 
 // We need this for the drop thread. By that point we have exclusive access to the data
 // It also, by contract of Scan, cannot have a Drop method that is unsafe in any thead
-unsafe impl Send for TrackedData {}
+unsafe impl Send for GcAllocation {}
 // Therefore, GcDataPtr is also UnwindSafe in the context we need it to be
-impl UnwindSafe for TrackedData {}
+impl UnwindSafe for GcAllocation {}
 // We use the lockout to ensure that `GcDataPtr`s are not shared
-unsafe impl Sync for TrackedData {}
+unsafe impl Sync for GcAllocation {}
 
-impl TrackedData {
+impl GcAllocation {
     pub fn allocate<T: Scan + 'static>(v: T) -> (Self, *const T) {
         // This is a straightforward use of alloc/write -- it should be undef free
         let data_ptr = unsafe {
@@ -54,11 +54,16 @@ impl TrackedData {
         dealloc(heap_ptr, dealloc_layout);
     }
 
-    pub fn scan<F: FnMut(GcInternalHandle)>(&self, callback: F) {
+    pub fn scan<F: FnMut(InternalGcRef)>(&self, callback: F) {
         unsafe {
             let mut scanner = Scanner::new(callback);
             let to_scan = &*self.0;
             to_scan.scan(&mut scanner);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) unsafe fn raw(v: *const dyn Scan) -> GcAllocation {
+        GcAllocation(v)
     }
 }

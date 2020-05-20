@@ -1,7 +1,8 @@
 mod alloc;
 mod trigger;
 
-use std::collections::HashMap;
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::panic::catch_unwind;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -11,52 +12,85 @@ use std::thread::spawn;
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, MutexGuard, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 
-use crate::collector::alloc::TrackedData;
+use crate::collector::alloc::GcAllocation;
 use crate::collector::trigger::TriggerData;
 use crate::lockout::{ExclusiveWarrant, Lockout, Warrant};
 use crate::Scan;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct GcInternalHandle(u64);
-impl GcInternalHandle {
-    pub(crate) fn new(n: u64) -> Self {
-        Self(n)
+pub struct InternalGcRef {
+    handle_ref: Arc<GcHandle>,
+}
+impl InternalGcRef {
+    pub(crate) fn new(handle_ref: Arc<GcHandle>) -> Self {
+        Self { handle_ref }
     }
 }
 
 pub struct Collector {
-    handle_idx_count: AtomicU64,
+    monotonic_counter: AtomicU64,
     trigger_data: Mutex<TriggerData>,
-    drop_thread_chan: Mutex<Sender<TrackedData>>,
+    drop_thread_chan: Mutex<Sender<GcAllocation>>,
     async_gc_chan: Mutex<Sender<()>>,
-    gc_data: RwLock<TrackedGcData>,
+    tracked_data: RwLock<TrackedData>,
 }
 
 #[derive(Debug)]
-struct TrackedGcData {
+struct TrackedData {
     collection_number: u64,
-    data: HashMap<TrackedData, GcMetadata>,
-    handles: HashMap<GcInternalHandle, HandleMetadata>,
+    data: HashSet<Arc<GcData>>,
+    handles: HashSet<Arc<GcHandle>>,
 }
 
 #[derive(Debug)]
-struct GcMetadata {
+struct GcData {
+    unique_id: u64,
+    underlying_allocation: GcAllocation,
     lockout: Arc<Lockout>,
-    last_marked: u64,
+    last_marked: AtomicU64,
 }
 
-#[derive(Debug)]
-struct HandleMetadata {
-    underlying_ptr: TrackedData,
-    lockout: Arc<Lockout>,
-    last_non_rooted: u64,
+impl Hash for GcData {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.unique_id.hash(state);
+    }
 }
+
+impl PartialEq for GcData {
+    fn eq(&self, other: &Self) -> bool {
+        self.unique_id == other.unique_id
+    }
+}
+
+impl Eq for GcData {}
+
+#[derive(Debug)]
+pub(crate) struct GcHandle {
+    unique_id: u64,
+    underlying_data: Arc<GcData>,
+    lockout: Arc<Lockout>,
+    last_non_rooted: AtomicU64,
+}
+
+impl Hash for GcHandle {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.unique_id.hash(state);
+    }
+}
+
+impl PartialEq for GcHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.unique_id == other.unique_id
+    }
+}
+
+impl Eq for GcHandle {}
 
 // TODO(issue): https://github.com/Others/shredder/issues/7
 
 impl Collector {
     fn new() -> Arc<Self> {
-        let (drop_sender, drop_receiver) = mpsc::channel::<TrackedData>();
+        let (drop_sender, drop_receiver) = mpsc::channel::<GcAllocation>();
 
         // The drop thread deals with doing all the Drops this collector needs to do
         spawn(move || {
@@ -75,14 +109,14 @@ impl Collector {
         let (async_gc_trigger, async_gc_receiver) = mpsc::channel::<()>();
 
         let res = Arc::new(Self {
-            handle_idx_count: AtomicU64::new(1),
+            monotonic_counter: AtomicU64::new(1),
             trigger_data: Mutex::default(),
             async_gc_chan: Mutex::new(async_gc_trigger),
             drop_thread_chan: Mutex::new(drop_sender),
-            gc_data: RwLock::new(TrackedGcData {
+            tracked_data: RwLock::new(TrackedData {
                 collection_number: 1,
-                data: HashMap::new(),
-                handles: HashMap::new(),
+                data: HashSet::new(),
+                handles: HashSet::new(),
             }),
         });
 
@@ -100,38 +134,36 @@ impl Collector {
         res
     }
 
-    fn synthesize_handle(&self) -> GcInternalHandle {
-        let n = self.handle_idx_count.fetch_add(1, Ordering::SeqCst);
-        GcInternalHandle::new(n)
+    fn get_unique_id(&self) -> u64 {
+        self.monotonic_counter.fetch_add(1, Ordering::SeqCst)
     }
 
-    pub fn track_data<T: Scan + 'static>(&self, data: T) -> (GcInternalHandle, *const T) {
-        let (gc_data_ptr, heap_ptr) = TrackedData::allocate(data);
-        let handle = self.synthesize_handle();
+    pub fn track_data<T: Scan + 'static>(&self, data: T) -> (InternalGcRef, *const T) {
+        let (gc_data_ptr, heap_ptr) = GcAllocation::allocate(data);
         let lockout = Lockout::new();
 
-        let mut gc_data = self.gc_data.write();
-        gc_data.data.insert(
-            gc_data_ptr,
-            GcMetadata {
-                lockout: lockout.clone(),
-                last_marked: 0,
-            },
-        );
-        assert!(!gc_data.handles.contains_key(&handle));
-        gc_data.handles.insert(
-            handle.clone(),
-            HandleMetadata {
-                underlying_ptr: gc_data_ptr,
-                lockout,
-                last_non_rooted: 0,
-            },
-        );
-        drop(gc_data);
+        let mut tracked_data = self.tracked_data.write();
+        let new_data = Arc::new(GcData {
+            unique_id: self.get_unique_id(),
+            underlying_allocation: gc_data_ptr,
+            lockout: lockout.clone(),
+            last_marked: AtomicU64::new(0),
+        });
+        tracked_data.data.insert(new_data.clone());
 
-        let res = (handle, heap_ptr);
+        let new_handle = Arc::new(GcHandle {
+            unique_id: self.get_unique_id(),
+            underlying_data: new_data,
+            lockout,
+            last_non_rooted: AtomicU64::new(0),
+        });
+        tracked_data.handles.insert(new_handle.clone());
+        drop(tracked_data);
+
+        let res = (InternalGcRef::new(new_handle), heap_ptr);
 
         // When we allocate, the heuristic for whether we need to GC might change
+        // FIXME: Use a smarter notification strategy
         self.async_gc_chan
             .lock()
             .send(())
@@ -140,54 +172,56 @@ impl Collector {
         res
     }
 
-    pub fn drop_handle(&self, handle: &GcInternalHandle) {
-        let mut gc_data = self.gc_data.write();
-
-        gc_data.handles.remove(handle);
+    pub fn drop_handle(&self, handle: &InternalGcRef) {
+        // FIXME: Break up locks so we can take a read lock here
+        let mut tracked_data = self.tracked_data.write();
+        tracked_data.handles.remove(&handle.handle_ref);
 
         // NOTE: We probably don't want to collect here since it can happen while we are dropping from a previous collection
         // self.async_gc_chan.lock().send(());
     }
 
-    pub fn clone_handle(&self, handle: &GcInternalHandle) -> GcInternalHandle {
+    pub fn clone_handle(&self, handle: &InternalGcRef) -> InternalGcRef {
+        // FIXME: Break up locks so we can take a read lock here
         // Note: On panic, the lock is freed normally -- which is what we want
-        let mut gc_data = self.gc_data.write();
+        let mut gc_data = self.tracked_data.write();
 
-        let new_metadata = {
-            let handle_metadata = gc_data
-                .handles
-                .get(handle)
-                .expect("Tried to clone a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
-            HandleMetadata {
-                underlying_ptr: handle_metadata.underlying_ptr,
-                lockout: handle_metadata.lockout.clone(),
-                last_non_rooted: 0,
-            }
-        };
+        if !gc_data.handles.contains(&handle.handle_ref) {
+            panic!("Tried to clone a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
+        }
 
-        let new_handle = self.synthesize_handle();
-        gc_data.handles.insert(new_handle.clone(), new_metadata);
+        let new_handle = Arc::new(GcHandle {
+            unique_id: self.get_unique_id(),
+            underlying_data: handle.handle_ref.underlying_data.clone(),
+            lockout: handle.handle_ref.lockout.clone(),
+            last_non_rooted: AtomicU64::new(0),
+        });
 
-        new_handle
+        gc_data.handles.insert(new_handle.clone());
+
+        InternalGcRef {
+            handle_ref: new_handle,
+        }
     }
 
-    pub fn get_data_warrant(&self, handle: &GcInternalHandle) -> Warrant {
+    pub fn get_data_warrant(&self, handle: &InternalGcRef) -> Warrant {
         // Note: On panic, the lock is freed normally -- which is what we want
-        let gc_data = self.gc_data.read();
+        let gc_data = self.tracked_data.read();
 
-        let handle_metadata = gc_data.handles.get(handle)
-            .expect("Tried to access Gc data, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
+        if !gc_data.handles.contains(&handle.handle_ref) {
+            panic!("Tried to access into a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
+        }
 
-        handle_metadata.lockout.get_warrant()
+        handle.handle_ref.lockout.get_warrant()
     }
 
     pub fn tracked_data_count(&self) -> usize {
-        let gc_data = self.gc_data.read();
+        let gc_data = self.tracked_data.read();
         gc_data.data.len()
     }
 
     pub fn handle_count(&self) -> usize {
-        let gc_data = self.gc_data.read();
+        let gc_data = self.tracked_data.read();
         gc_data.handles.len()
     }
 
@@ -199,7 +233,7 @@ impl Collector {
 
     pub fn check_then_collect(&self) -> bool {
         let trigger = self.trigger_data.lock();
-        let gc_data = self.gc_data.upgradable_read();
+        let gc_data = self.tracked_data.upgradable_read();
         if trigger.should_collect(gc_data.data.len()) {
             self.do_collect(trigger, RwLockUpgradableReadGuard::upgrade(gc_data));
             true
@@ -210,7 +244,7 @@ impl Collector {
 
     pub fn collect(&self) {
         let trigger_data = self.trigger_data.lock();
-        let gc_data = self.gc_data.write();
+        let gc_data = self.tracked_data.write();
         self.do_collect(trigger_data, gc_data);
     }
 
@@ -221,89 +255,83 @@ impl Collector {
     fn do_collect(
         &self,
         mut trigger_data: MutexGuard<TriggerData>,
-        mut gc_data_guard: RwLockWriteGuard<TrackedGcData>,
+        mut tracked_data_guard: RwLockWriteGuard<TrackedData>,
     ) {
         trace!("Beginning collection");
 
-        gc_data_guard.collection_number += 1;
-        let current_collection = gc_data_guard.collection_number;
+        tracked_data_guard.collection_number += 1;
+        let current_collection = tracked_data_guard.collection_number;
 
         // The warrant system prevents us from scanning in-use data
         let mut warrants: Vec<ExclusiveWarrant> = Vec::new();
 
-        let gc_data = &mut *gc_data_guard;
-        let tracked_data = &mut gc_data.data;
-        let tracked_handles = &mut gc_data.handles;
+        let tracked_data = &mut *tracked_data_guard;
+        let tracked_items = &mut tracked_data.data;
 
         // eprintln!("tracked data {:?}", tracked_data);
         // eprintln!("tracked handles {:?}", tracked_handles);
 
-        for (gc_data_ptr, metadata) in &mut *tracked_data {
-            if let Some(warrant) = metadata.lockout.get_exclusive_warrant() {
+        for data in tracked_items.iter() {
+            if let Some(warrant) = data.lockout.get_exclusive_warrant() {
                 // Save that warrant so things can't shift around under us
                 warrants.push(warrant);
 
                 // Now figure out what handles are not rooted
-                gc_data_ptr.scan(|h| {
-                    let found_handle_metadata = tracked_handles
-                        .get_mut(&h)
-                        .expect("should always find a handle if it's present in data");
-                    found_handle_metadata.last_non_rooted = current_collection;
+                data.underlying_allocation.scan(|h| {
+                    h.handle_ref
+                        .last_non_rooted
+                        .store(current_collection, Ordering::SeqCst);
                 });
             } else {
                 // eprintln!("failed to get warrant!");
                 // If we can't get the warrant, then this data must be in use, so we can mark it
-                metadata.last_marked = current_collection;
+                data.last_marked.store(current_collection, Ordering::SeqCst);
             }
         }
 
-        let tracked_handles = &gc_data.handles;
+        let tracked_handles = &tracked_data.handles;
         let mut roots = Vec::new();
-        for (handle, handle_metadata) in tracked_handles {
+        for handle in tracked_handles {
             // If the `last_non_rooted` number was not now, then it is a root
-            if handle_metadata.last_non_rooted != current_collection {
-                roots.push((handle.clone(), handle_metadata));
+            if handle.last_non_rooted.load(Ordering::SeqCst) != current_collection {
+                roots.push(handle.clone());
             }
         }
 
         // eprintln!("roots {:?}", roots);
 
         let mut dfs_stack = roots;
-        while let Some((_, handle_metadata)) = dfs_stack.pop() {
-            let data_ptr = &handle_metadata.underlying_ptr;
-            let ptr_metadata = tracked_data
-                .get_mut(data_ptr)
-                .expect("all data must have associated metadata");
+        while let Some(handle) = dfs_stack.pop() {
+            let data = &handle.underlying_data;
 
             // Essential note! Since all non warranted data is automatically marked, we will never accidently scan non-warranted data here
-            if ptr_metadata.last_marked != current_collection {
-                ptr_metadata.last_marked = current_collection;
+            if data.last_marked.load(Ordering::SeqCst) != current_collection {
+                data.last_marked.store(current_collection, Ordering::SeqCst);
 
-                data_ptr.scan(|h| {
-                    let metadata = tracked_handles
-                        .get(&h)
-                        .expect("all handles must have metadata");
-                    dfs_stack.push((h, metadata));
+                data.underlying_allocation.scan(|h| {
+                    dfs_stack.push(h.handle_ref);
                 });
             }
         }
 
-        let tracked_handles = &mut gc_data.handles;
+        let tracked_handles = &mut tracked_data.handles;
         let drop_thread_chan = self.drop_thread_chan.lock();
-        tracked_data.retain(|data_ptr, ptr_metadata| {
+        tracked_items.retain(|data| {
             // If this is true, we just marked this data
-            if ptr_metadata.last_marked == current_collection {
+            if data.last_marked.load(Ordering::SeqCst) == current_collection {
                 // so retain it
                 true
             } else {
+                // Otherwise we didn't mark it and it should be deallocated
+
                 // eprintln!("deallocating {:?}", data_ptr);
 
-                data_ptr.scan(|h| {
-                    tracked_handles.remove(&h);
+                data.underlying_allocation.scan(|h| {
+                    tracked_handles.remove(&h.handle_ref);
                 });
 
-                // Otherwise set this data up to be deallocated
-                if let Err(e) = drop_thread_chan.send(data_ptr.clone()) {
+                // Send it to the drop thread to be dropped
+                if let Err(e) = drop_thread_chan.send(data.underlying_allocation.clone()) {
                     error!("Error sending to drop thread {}", e);
                 }
 
@@ -314,7 +342,7 @@ impl Collector {
                 false
             }
         });
-        drop(gc_data_guard);
+        drop(tracked_data_guard);
 
         trigger_data.set_data_count_after_collection(self.tracked_data_count());
 
@@ -323,3 +351,32 @@ impl Collector {
 }
 
 pub static COLLECTOR: Lazy<Arc<Collector>> = Lazy::new(Collector::new);
+
+#[cfg(test)]
+pub(crate) fn get_mock_handle() -> InternalGcRef {
+    use crate::{GcSafe, Scanner};
+
+    pub(crate) struct MockAllocation;
+    unsafe impl Scan for MockAllocation {
+        fn scan(&self, _: &mut Scanner) {}
+    }
+    unsafe impl GcSafe for MockAllocation {}
+
+    let lockout = Lockout::new();
+
+    let mock_scannable: Box<dyn Scan> = Box::new(MockAllocation);
+
+    // Note: Here we assume a random u64 is unique. That's hacky, but is fine for testing :)
+    InternalGcRef::new(Arc::new(GcHandle {
+        unique_id: rand::random(),
+        underlying_data: Arc::new(GcData {
+            unique_id: rand::random(),
+            // HACK: Since this is used for
+            underlying_allocation: unsafe { GcAllocation::raw(Box::into_raw(mock_scannable)) },
+            lockout: lockout.clone(),
+            last_marked: Default::default(),
+        }),
+        lockout,
+        last_non_rooted: Default::default(),
+    }))
+}
