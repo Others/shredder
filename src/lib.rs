@@ -1,5 +1,5 @@
-//! # Shredder
-//!
+//! shredder
+//! ========
 //! `shredder` is a library providing a garbage collected smart pointer: `Gc`.
 //! This is useful for times where you want shared access to some data, but the structure
 //! of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
@@ -10,17 +10,19 @@
 //! - ready for fearless concurrency: works in multi-threaded contexts
 //! - safe: detects error conditions on the fly, and protects you from undefined behavior
 //! - limited stop-the world: regular processing will rarely be interrupted
-//! - concurrent collection: collection and destruction happens in the background
-//!
+//! - concurrent collection: collection happens in the background
+//! - concurrent destruction: destructors are run in the background
 //!
 //! `shredder` has the following limitations:
-//! - non-sync ergonomics: `Send` objects need a guard object
+//! - guarded access: `Gc` requires acquiring a guard
 //! - multiple collectors: multiple collectors do not co-operate
 //! - can't handle `Rc`/`Arc`: requires all `Gc` objects have straightforward ownership semantics
 //! - non static data: `Gc` cannot handle non 'static data (fix WIP)
+//! - no no-std support: The collector requires threading and other `std` features (fix WIP)
+//! - non-optimal performance: The collector needs to be optimized and parallelized further (fix WIP)
 
 // We love docs here
-// #![deny(missing_docs)]
+#![deny(missing_docs)]
 // Clippy configuration:
 // I'd like the most pedantic warning level
 #![warn(
@@ -58,7 +60,14 @@ pub use smart_ptr::{Gc, GcGuard, GcRef, GcRefMut};
 // Re-export the Scan derive
 pub use shredder_derive::Scan;
 
-pub type GRef<T> = Gc<RefCell<T>>;
+/// `GRefCell` is a convenient alias for `Gc<RefCell<T>>`
+/// Note that `Gc<RefCell<T>>` has additional specialized methods for working with `RefCell`s inside
+/// `Gc`s
+pub type GRefCell<T> = Gc<RefCell<T>>;
+
+/// `GMutex` is a convenient alias for `Gc<Mutex<T>>`
+/// Note that `Gc<Mutex<T>>` has additional specialized methods for working with `Mutex`s inside
+/// `Gc`s
 pub type GMutex<T> = Gc<Mutex<T>>;
 
 /// Returns how many underlying allocations are currently allocated
@@ -115,14 +124,55 @@ pub fn set_gc_trigger_percent(percent: f32) {
 /// garbage collector operations. This can be an extremely slow operation, since the algorithm is
 /// designed to be run in the background, while this method runs it on the thread that calls the
 /// method. Additionally, you may end up blocking waiting to collect, since `shredder` doesn't allow
-/// two collections at once
+/// two collections at once (and if this happens, you'll effectively get two collections in a row).
 ///
 /// # Example
 /// ```
 /// use shredder::collect;
 /// collect(); // Manually run GC
 /// ```
-#[allow(clippy::must_use_candidate)]
 pub fn collect() {
     COLLECTOR.collect();
+}
+
+/// `synchronize_destructors` blocks the current thread until the background thread has finished
+/// running the destructors for all data that was marked as garbage at the point this method was
+/// called.
+///
+/// This method is most useful for testing, as well as cleaning up at the termination of your
+/// program.
+/// # Example
+/// ```
+/// use shredder::{collect, synchronize_destructors};
+/// // Create some data
+/// // <SNIP>
+/// // Gc happens
+/// collect();
+/// // We cleanup
+/// synchronize_destructors();
+/// // At this point all destructors for garbage will have been run
+/// ```
+pub fn synchronize_destructors() {
+    COLLECTOR.synchronize_destructors()
+}
+
+/// `run_with_gc_cleanup` is a convenience method for helping ensure your destructors are run. While
+/// in Rust you can never assume that destructors run, but using this method helps `shredder` not
+/// contribute to that problem.
+/// # Example
+/// ```
+/// use shredder::{run_with_gc_cleanup};
+///
+/// // Generally you'd put this in `main`
+/// run_with_gc_cleanup(|| {
+///     // Your code goes here!
+/// })
+/// ```
+pub fn run_with_gc_cleanup<T, F: FnOnce() -> T>(f: F) -> T {
+    let res = f();
+
+    collect();
+    synchronize_destructors();
+
+    res
 }

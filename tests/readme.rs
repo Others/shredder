@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 
-use shredder::{collect, number_of_tracked_allocations, Gc, Scan};
+use shredder::{
+    number_of_active_handles, number_of_tracked_allocations, run_with_gc_cleanup, Gc, Scan,
+};
 
 #[derive(Scan)]
 struct Node {
@@ -10,7 +12,8 @@ struct Node {
 
 #[test]
 fn _main() {
-    {
+    // Using `run_with_gc_cleanup` is good practice, since it helps ensure destructors are run
+    run_with_gc_cleanup(|| {
         let a = Gc::new(RefCell::new(Node {
             data: "A".to_string(),
             directed_edges: Vec::new(),
@@ -21,13 +24,11 @@ fn _main() {
             directed_edges: Vec::new(),
         }));
 
-        // Usually would need `get` for non-`Sync` data, but `RefCell` is a special case
+        // Usually would need `get` for `Gc` data, but `RefCell` is a special case
         a.borrow_mut().directed_edges.push(b.clone());
         b.borrow_mut().directed_edges.push(a.clone());
-    }
-
-    // Running `collect` like this, at the end of main (after everything is dropped) is good practice
-    // It helps ensure destructors are run
-    collect();
+    });
+    // Everything was cleaned up!
     assert_eq!(number_of_tracked_allocations(), 0);
+    assert_eq!(number_of_active_handles(), 0);
 }

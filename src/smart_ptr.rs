@@ -355,7 +355,7 @@ where
 }
 
 /// A `GcGuard` lets you access the underlying data of a `Gc`
-/// It exists since non-`Sync` data needs protection from being scanned concurrently
+/// It exists as data needs protection from being scanned while it's being concurrently modified
 #[derive(Debug)]
 pub struct GcGuard<'a, T: Scan> {
     gc_ptr: &'a Gc<T>,

@@ -27,12 +27,18 @@ impl InternalGcRef {
     }
 }
 
+// FIXME: use crossbeam channels instead of Mutexs around senders
 pub struct Collector {
     monotonic_counter: AtomicU64,
     trigger_data: Mutex<TriggerData>,
-    drop_thread_chan: Mutex<Sender<Arc<GcData>>>,
+    drop_thread_chan: Mutex<Sender<DropMessage>>,
     async_gc_chan: Mutex<Sender<()>>,
     tracked_data: RwLock<TrackedData>,
+}
+
+enum DropMessage {
+    DataToDrop(Arc<GcData>),
+    SyncUp(Sender<()>),
 }
 
 #[derive(Debug)]
@@ -91,23 +97,32 @@ impl Eq for GcHandle {}
 
 impl Collector {
     fn new() -> Arc<Self> {
-        let (drop_sender, drop_receiver) = mpsc::channel::<Arc<GcData>>();
+        let (drop_sender, drop_receiver) = mpsc::channel::<DropMessage>();
 
         // The drop thread deals with doing all the Drops this collector needs to do
         spawn(move || {
             // An Err value means the stream will never recover
-            while let Ok(ptr) = drop_receiver.recv() {
-                // Mark this data as in the process of being deallocated and unsafe to access
-                // NOTE: All drops must be linearly in one thread, otherwise there could be a race around this flag being set
-                ptr.deallocated.store(true, Ordering::SeqCst);
+            while let Ok(drop_msg) = drop_receiver.recv() {
+                match drop_msg {
+                    DropMessage::DataToDrop(data) => {
+                        // Mark this data as in the process of being deallocated and unsafe to access
+                        // NOTE: All drops must be linearly in one thread, otherwise there could be a race around this flag being set
+                        data.deallocated.store(true, Ordering::SeqCst);
 
-                // Deallocate / Run Drop
-                let underlying_allocation = ptr.underlying_allocation;
-                let res = catch_unwind(move || unsafe {
-                    underlying_allocation.deallocate();
-                });
-                if let Err(e) = res {
-                    eprintln!("Gc background drop failed: {:?}", e);
+                        // Deallocate / Run Drop
+                        let underlying_allocation = data.underlying_allocation;
+                        let res = catch_unwind(move || unsafe {
+                            underlying_allocation.deallocate();
+                        });
+                        if let Err(e) = res {
+                            eprintln!("Gc background drop failed: {:?}", e);
+                        }
+                    }
+                    DropMessage::SyncUp(responder) => {
+                        if let Err(e) = responder.send(()) {
+                            eprintln!("Gc background syncup failed: {:?}", e);
+                        }
+                    }
                 }
             }
         });
@@ -243,6 +258,18 @@ impl Collector {
             .set_trigger_percent(new_trigger_percent);
     }
 
+    pub fn synchronize_destructors(&self) {
+        let (sender, reciever) = mpsc::channel();
+        let drop_msg = DropMessage::SyncUp(sender);
+        {
+            self.drop_thread_chan
+                .lock()
+                .send(drop_msg)
+                .expect("drop thread should be infallible!");
+        }
+        reciever.recv().expect("drop thread should be infallible!");
+    }
+
     pub fn check_then_collect(&self) -> bool {
         let trigger = self.trigger_data.lock();
         let gc_data = self.tracked_data.upgradable_read();
@@ -338,12 +365,15 @@ impl Collector {
 
                 // eprintln!("deallocating {:?}", data_ptr);
 
+                // FIXME: Experiment with moving the tracked handle cleanup and dropping to a loop
+                //        after releasing the other lock
                 data.underlying_allocation.scan(|h| {
                     tracked_handles.remove(&h.handle_ref);
                 });
 
                 // Send it to the drop thread to be dropped
-                if let Err(e) = drop_thread_chan.send(data.clone()) {
+                let drop_msg = DropMessage::DataToDrop(data.clone());
+                if let Err(e) = drop_thread_chan.send(drop_msg) {
                     error!("Error sending to drop thread {}", e);
                 }
 

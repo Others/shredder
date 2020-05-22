@@ -101,7 +101,7 @@ pub struct Scanner<'a> {
 #[allow(clippy::unused_self)]
 impl<'a> Scanner<'a> {
     #[must_use]
-    pub fn new<F: FnMut(InternalGcRef) + 'a>(callback: F) -> Self {
+    pub(crate) fn new<F: FnMut(InternalGcRef) + 'a>(callback: F) -> Self {
         Self {
             scan_callback: Box::new(callback),
         }
@@ -145,7 +145,7 @@ unsafe impl<T> GcSafe for &mut T {}
 
 // FIXME: This macro can be removed once we have overlapping marker traits
 //        (https://github.com/rust-lang/rust/issues/29864)
-/// A `Send` type can be safely marked as `GcSafe`, and this macro easies
+/// A `Send` type can be safely marked as `GcSafe`, and this macro eases that implementation
 #[macro_export]
 macro_rules! mark_send_type_gc_safe {
     ( $t:ty ) => {
