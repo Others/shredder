@@ -223,7 +223,7 @@ unsafe impl<T: Scan> Scan for Vec<T> {
         }
     }
 }
-unsafe impl<T: Scan> GcSafe for Vec<T> {}
+unsafe impl<T: GcSafe> GcSafe for Vec<T> {}
 
 unsafe impl<T: Scan, S: BuildHasher> Scan for HashSet<T, S> {
     fn scan(&self, scanner: &mut Scanner) {
@@ -232,7 +232,8 @@ unsafe impl<T: Scan, S: BuildHasher> Scan for HashSet<T, S> {
         }
     }
 }
-unsafe impl<T: Scan, S: BuildHasher> GcSafe for HashSet<T, S> {}
+// FIXME: Would a bad build hasher cause problems?
+unsafe impl<T: GcSafe, S: BuildHasher> GcSafe for HashSet<T, S> {}
 
 unsafe impl<K: Scan, V: Scan, S: BuildHasher> Scan for HashMap<K, V, S> {
     fn scan(&self, scanner: &mut Scanner) {
@@ -242,7 +243,8 @@ unsafe impl<K: Scan, V: Scan, S: BuildHasher> Scan for HashMap<K, V, S> {
         }
     }
 }
-unsafe impl<K: Scan, V: Scan, S: BuildHasher> GcSafe for HashMap<K, V, S> {}
+// FIXME: Would a bad build hasher cause problems?
+unsafe impl<K: GcSafe, V: GcSafe, S: BuildHasher> GcSafe for HashMap<K, V, S> {}
 
 unsafe impl<T: Scan> Scan for RefCell<T> {
     fn scan(&self, scanner: &mut Scanner) {
@@ -255,7 +257,7 @@ unsafe impl<T: Scan> Scan for RefCell<T> {
         }
     }
 }
-unsafe impl<T: Scan> GcSafe for RefCell<T> {}
+unsafe impl<T: GcSafe> GcSafe for RefCell<T> {}
 
 unsafe impl<T: Scan> Scan for Option<T> {
     fn scan(&self, scanner: &mut Scanner) {
@@ -264,7 +266,7 @@ unsafe impl<T: Scan> Scan for Option<T> {
         }
     }
 }
-unsafe impl<T: Scan> GcSafe for Option<T> {}
+unsafe impl<T: GcSafe> GcSafe for Option<T> {}
 
 unsafe impl<T: Scan> Scan for Mutex<T> {
     fn scan(&self, scanner: &mut Scanner) {
@@ -277,7 +279,7 @@ unsafe impl<T: Scan> Scan for Mutex<T> {
         }
     }
 }
-unsafe impl<T: Scan> GcSafe for Mutex<T> {}
+unsafe impl<T: GcSafe> GcSafe for Mutex<T> {}
 
 unsafe impl<T: Scan> Scan for RwLock<T> {
     fn scan(&self, scanner: &mut Scanner) {
@@ -290,7 +292,7 @@ unsafe impl<T: Scan> Scan for RwLock<T> {
         }
     }
 }
-unsafe impl<T: Scan> GcSafe for RwLock<T> {}
+unsafe impl<T: GcSafe> GcSafe for RwLock<T> {}
 
 // Primitives do not hold any Gc<T>s
 impl_empty_scan_for_send_type!(isize);

@@ -4,7 +4,7 @@ mod trigger;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::panic::catch_unwind;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::spawn;
@@ -30,7 +30,7 @@ impl InternalGcRef {
 pub struct Collector {
     monotonic_counter: AtomicU64,
     trigger_data: Mutex<TriggerData>,
-    drop_thread_chan: Mutex<Sender<GcAllocation>>,
+    drop_thread_chan: Mutex<Sender<Arc<GcData>>>,
     async_gc_chan: Mutex<Sender<()>>,
     tracked_data: RwLock<TrackedData>,
 }
@@ -47,6 +47,7 @@ struct GcData {
     unique_id: u64,
     underlying_allocation: GcAllocation,
     lockout: Arc<Lockout>,
+    deallocated: AtomicBool,
     last_marked: AtomicU64,
 }
 
@@ -90,15 +91,20 @@ impl Eq for GcHandle {}
 
 impl Collector {
     fn new() -> Arc<Self> {
-        let (drop_sender, drop_receiver) = mpsc::channel::<GcAllocation>();
+        let (drop_sender, drop_receiver) = mpsc::channel::<Arc<GcData>>();
 
         // The drop thread deals with doing all the Drops this collector needs to do
         spawn(move || {
             // An Err value means the stream will never recover
             while let Ok(ptr) = drop_receiver.recv() {
+                // Mark this data as in the process of being deallocated and unsafe to access
+                // NOTE: All drops must be linearly in one thread, otherwise there could be a race around this flag being set
+                ptr.deallocated.store(true, Ordering::SeqCst);
+
                 // Deallocate / Run Drop
+                let underlying_allocation = ptr.underlying_allocation;
                 let res = catch_unwind(move || unsafe {
-                    ptr.deallocate();
+                    underlying_allocation.deallocate();
                 });
                 if let Err(e) = res {
                     eprintln!("Gc background drop failed: {:?}", e);
@@ -147,6 +153,7 @@ impl Collector {
             unique_id: self.get_unique_id(),
             underlying_allocation: gc_data_ptr,
             lockout: lockout.clone(),
+            deallocated: AtomicBool::new(false),
             last_marked: AtomicU64::new(0),
         });
         tracked_data.data.insert(new_data.clone());
@@ -186,6 +193,7 @@ impl Collector {
         // Note: On panic, the lock is freed normally -- which is what we want
         let mut gc_data = self.tracked_data.write();
 
+        // Technically this safety check is unnecessary, but it's pretty fast and will catch some bad behavior
         if !gc_data.handles.contains(&handle.handle_ref) {
             panic!("Tried to clone a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
         }
@@ -204,14 +212,18 @@ impl Collector {
         }
     }
 
+    #[allow(clippy::unused_self)]
     pub fn get_data_warrant(&self, handle: &InternalGcRef) -> Warrant {
-        // Note: On panic, the lock is freed normally -- which is what we want
-        let gc_data = self.tracked_data.read();
-
-        if !gc_data.handles.contains(&handle.handle_ref) {
+        // Note: We do not take the lock here
+        // This check is only necessary in the destructor thread, and it will always set a flag before deallocating data
+        let data_deallocated = handle
+            .handle_ref
+            .underlying_data
+            .deallocated
+            .load(Ordering::SeqCst);
+        if data_deallocated {
             panic!("Tried to access into a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
         }
-
         handle.handle_ref.lockout.get_warrant()
     }
 
@@ -331,12 +343,12 @@ impl Collector {
                 });
 
                 // Send it to the drop thread to be dropped
-                if let Err(e) = drop_thread_chan.send(data.underlying_allocation.clone()) {
+                if let Err(e) = drop_thread_chan.send(data.clone()) {
                     error!("Error sending to drop thread {}", e);
                 }
 
-                // Note: It's okay to send all the data before we've completely removed it from the map
-                // The cross check will stall till we release the data lock
+                // Note: It's okay to send all the data before we've removed it from the map
+                // The destructor manages the `destructed` flag so we can never access free'd data
 
                 // Don't retain this data
                 false
@@ -371,12 +383,12 @@ pub(crate) fn get_mock_handle() -> InternalGcRef {
         unique_id: rand::random(),
         underlying_data: Arc::new(GcData {
             unique_id: rand::random(),
-            // HACK: Since this is used for
             underlying_allocation: unsafe { GcAllocation::raw(Box::into_raw(mock_scannable)) },
             lockout: lockout.clone(),
-            last_marked: Default::default(),
+            deallocated: AtomicBool::new(false),
+            last_marked: AtomicU64::new(0),
         }),
         lockout,
-        last_non_rooted: Default::default(),
+        last_non_rooted: AtomicU64::new(0),
     }))
 }
