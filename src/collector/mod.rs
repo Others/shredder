@@ -1,18 +1,19 @@
 mod alloc;
+mod dropper;
 mod trigger;
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
-use std::panic::catch_unwind;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Sender};
 use std::sync::Arc;
 use std::thread::spawn;
 
+use crossbeam::Sender;
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, MutexGuard, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
 
 use crate::collector::alloc::GcAllocation;
+use crate::collector::dropper::{BackgroundDropper, DropMessage};
 use crate::collector::trigger::TriggerData;
 use crate::lockout::{ExclusiveWarrant, Lockout, Warrant};
 use crate::Scan;
@@ -27,18 +28,12 @@ impl InternalGcRef {
     }
 }
 
-// FIXME: use crossbeam channels instead of Mutexs around senders
 pub struct Collector {
     monotonic_counter: AtomicU64,
     trigger_data: Mutex<TriggerData>,
-    drop_thread_chan: Mutex<Sender<DropMessage>>,
-    async_gc_chan: Mutex<Sender<()>>,
+    dropper: BackgroundDropper,
+    async_gc_notifier: Sender<()>,
     tracked_data: RwLock<TrackedData>,
-}
-
-enum DropMessage {
-    DataToDrop(Arc<GcData>),
-    SyncUp(Sender<()>),
 }
 
 #[derive(Debug)]
@@ -49,7 +44,7 @@ struct TrackedData {
 }
 
 #[derive(Debug)]
-struct GcData {
+pub(crate) struct GcData {
     unique_id: u64,
     underlying_allocation: GcAllocation,
     lockout: Arc<Lockout>,
@@ -97,43 +92,13 @@ impl Eq for GcHandle {}
 
 impl Collector {
     fn new() -> Arc<Self> {
-        let (drop_sender, drop_receiver) = mpsc::channel::<DropMessage>();
-
-        // The drop thread deals with doing all the Drops this collector needs to do
-        spawn(move || {
-            // An Err value means the stream will never recover
-            while let Ok(drop_msg) = drop_receiver.recv() {
-                match drop_msg {
-                    DropMessage::DataToDrop(data) => {
-                        // Mark this data as in the process of being deallocated and unsafe to access
-                        // NOTE: All drops must be linearly in one thread, otherwise there could be a race around this flag being set
-                        data.deallocated.store(true, Ordering::SeqCst);
-
-                        // Deallocate / Run Drop
-                        let underlying_allocation = data.underlying_allocation;
-                        let res = catch_unwind(move || unsafe {
-                            underlying_allocation.deallocate();
-                        });
-                        if let Err(e) = res {
-                            eprintln!("Gc background drop failed: {:?}", e);
-                        }
-                    }
-                    DropMessage::SyncUp(responder) => {
-                        if let Err(e) = responder.send(()) {
-                            eprintln!("Gc background syncup failed: {:?}", e);
-                        }
-                    }
-                }
-            }
-        });
-
-        let (async_gc_trigger, async_gc_receiver) = mpsc::channel::<()>();
+        let (async_gc_notifier, async_gc_receiver) = crossbeam::bounded(1);
 
         let res = Arc::new(Self {
             monotonic_counter: AtomicU64::new(1),
             trigger_data: Mutex::default(),
-            async_gc_chan: Mutex::new(async_gc_trigger),
-            drop_thread_chan: Mutex::new(drop_sender),
+            dropper: BackgroundDropper::new(),
+            async_gc_notifier,
             tracked_data: RwLock::new(TrackedData {
                 collection_number: 1,
                 data: HashSet::new(),
@@ -185,11 +150,16 @@ impl Collector {
         let res = (InternalGcRef::new(new_handle), heap_ptr);
 
         // When we allocate, the heuristic for whether we need to GC might change
-        // FIXME: Use a smarter notification strategy
-        self.async_gc_chan
-            .lock()
-            .send(())
-            .expect("notifying the async gc thread should always succeed");
+        // Note: We only send if there is room in the channel
+        // If there's already a notification there the async thread is already notified
+        select! {
+            send(self.async_gc_notifier, ()) -> res => {
+                if let Err(e) = res {
+                    error!("Could not notify async gc thread: {}", e);
+                }
+            },
+            default => (),
+        };
 
         res
     }
@@ -259,12 +229,11 @@ impl Collector {
     }
 
     pub fn synchronize_destructors(&self) {
-        let (sender, reciever) = mpsc::channel();
+        let (sender, reciever) = crossbeam::bounded(0);
         let drop_msg = DropMessage::SyncUp(sender);
         {
-            self.drop_thread_chan
-                .lock()
-                .send(drop_msg)
+            self.dropper
+                .send_msg(drop_msg)
                 .expect("drop thread should be infallible!");
         }
         reciever.recv().expect("drop thread should be infallible!");
@@ -354,7 +323,6 @@ impl Collector {
         }
 
         let tracked_handles = &mut tracked_data.handles;
-        let drop_thread_chan = self.drop_thread_chan.lock();
         tracked_items.retain(|data| {
             // If this is true, we just marked this data
             if data.last_marked.load(Ordering::SeqCst) == current_collection {
@@ -373,7 +341,7 @@ impl Collector {
 
                 // Send it to the drop thread to be dropped
                 let drop_msg = DropMessage::DataToDrop(data.clone());
-                if let Err(e) = drop_thread_chan.send(drop_msg) {
+                if let Err(e) = self.dropper.send_msg(drop_msg) {
                     error!("Error sending to drop thread {}", e);
                 }
 

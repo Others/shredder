@@ -13,7 +13,6 @@ use crate::lockout::Warrant;
 use crate::Scan;
 
 /// `Gc` is a smart-pointer for data tracked by `shredder` garbage collector
-#[derive(Debug)]
 pub struct Gc<T: Scan> {
     backing_handle: InternalGcRef,
     direct_ptr: *const T,
@@ -40,7 +39,7 @@ impl<T: Scan> Gc<T> {
         let warrant = COLLECTOR.get_data_warrant(&self.backing_handle);
         GcGuard {
             gc_ptr: self,
-            warrant,
+            _warrant: warrant,
         }
     }
 
@@ -238,6 +237,15 @@ impl<T: Scan + 'static> Gc<sync::Mutex<T>> {
 }
 
 // Lots of traits it's good for a smart ptr to implement:
+impl<T: Scan> Debug for Gc<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Gc")
+            .field("backing_handle", &"<SNIP>")
+            .field("direct_ptr", &self.direct_ptr)
+            .finish()
+    }
+}
+
 impl<T: Scan> Default for Gc<T>
 where
     T: Default + 'static,
@@ -356,10 +364,9 @@ where
 
 /// A `GcGuard` lets you access the underlying data of a `Gc`
 /// It exists as data needs protection from being scanned while it's being concurrently modified
-#[derive(Debug)]
 pub struct GcGuard<'a, T: Scan> {
     gc_ptr: &'a Gc<T>,
-    warrant: Warrant,
+    _warrant: Warrant,
 }
 
 impl<'a, T: Scan> Deref for GcGuard<'a, T> {
@@ -385,5 +392,14 @@ impl<'a, T: Scan> Borrow<T> for GcGuard<'a, T> {
     #[must_use]
     fn borrow(&self) -> &T {
         self.deref()
+    }
+}
+
+impl<'a, T: Scan + Debug> Debug for GcGuard<'a, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GcGuard")
+            .field("v", self.deref())
+            .field("warrant", &"<SNIP>")
+            .finish()
     }
 }

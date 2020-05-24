@@ -39,6 +39,9 @@
 )]
 
 #[macro_use]
+extern crate crossbeam;
+
+#[macro_use]
 extern crate log;
 
 #[macro_use]
