@@ -14,7 +14,7 @@ use parking_lot::{Mutex, MutexGuard, RwLock, RwLockUpgradableReadGuard, RwLockWr
 
 use crate::collector::alloc::GcAllocation;
 use crate::collector::dropper::{BackgroundDropper, DropMessage};
-use crate::collector::trigger::TriggerData;
+use crate::collector::trigger::Trigger;
 use crate::lockout::{ExclusiveWarrant, Lockout, Warrant};
 use crate::Scan;
 
@@ -30,7 +30,8 @@ impl InternalGcRef {
 
 pub struct Collector {
     monotonic_counter: AtomicU64,
-    trigger_data: Mutex<TriggerData>,
+    gc_lock: Mutex<()>,
+    trigger: Trigger,
     dropper: BackgroundDropper,
     async_gc_notifier: Sender<()>,
     tracked_data: RwLock<TrackedData>,
@@ -96,7 +97,8 @@ impl Collector {
 
         let res = Arc::new(Self {
             monotonic_counter: AtomicU64::new(1),
-            trigger_data: Mutex::default(),
+            gc_lock: Mutex::default(),
+            trigger: Trigger::default(),
             dropper: BackgroundDropper::new(),
             async_gc_notifier,
             tracked_data: RwLock::new(TrackedData {
@@ -223,9 +225,7 @@ impl Collector {
     }
 
     pub fn set_gc_trigger_percent(&self, new_trigger_percent: f32) {
-        self.trigger_data
-            .lock()
-            .set_trigger_percent(new_trigger_percent);
+        self.trigger.set_trigger_percent(new_trigger_percent);
     }
 
     pub fn synchronize_destructors(&self) {
@@ -240,10 +240,11 @@ impl Collector {
     }
 
     pub fn check_then_collect(&self) -> bool {
-        let trigger = self.trigger_data.lock();
+        let gc_guard = self.gc_lock.lock();
+
         let gc_data = self.tracked_data.upgradable_read();
-        if trigger.should_collect(gc_data.data.len()) {
-            self.do_collect(trigger, RwLockUpgradableReadGuard::upgrade(gc_data));
+        if self.trigger.should_collect(gc_data.data.len()) {
+            self.do_collect(gc_guard, RwLockUpgradableReadGuard::upgrade(gc_data));
             true
         } else {
             false
@@ -251,9 +252,9 @@ impl Collector {
     }
 
     pub fn collect(&self) {
-        let trigger_data = self.trigger_data.lock();
+        let gc_guard = self.gc_lock.lock();
         let gc_data = self.tracked_data.write();
-        self.do_collect(trigger_data, gc_data);
+        self.do_collect(gc_guard, gc_data);
     }
 
     // TODO(issue): https://github.com/Others/shredder/issues/13
@@ -262,7 +263,7 @@ impl Collector {
     #[allow(clippy::shadow_unrelated)]
     fn do_collect(
         &self,
-        mut trigger_data: MutexGuard<TriggerData>,
+        gc_guard: MutexGuard<()>,
         mut tracked_data_guard: RwLockWriteGuard<TrackedData>,
     ) {
         trace!("Beginning collection");
@@ -354,7 +355,10 @@ impl Collector {
         });
         drop(tracked_data_guard);
 
-        trigger_data.set_data_count_after_collection(self.tracked_data_count());
+        self.trigger
+            .set_data_count_after_collection(self.tracked_data_count());
+
+        drop(gc_guard);
 
         trace!("Collection finished");
     }
