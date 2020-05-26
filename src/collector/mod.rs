@@ -2,15 +2,16 @@ mod alloc;
 mod dropper;
 mod trigger;
 
-use std::collections::HashSet;
+use std::cmp;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::spawn;
 
 use crossbeam::Sender;
+use flurry::HashSet;
 use once_cell::sync::Lazy;
-use parking_lot::{Mutex, MutexGuard, RwLock, RwLockUpgradableReadGuard, RwLockWriteGuard};
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::collector::alloc::GcAllocation;
 use crate::collector::dropper::{BackgroundDropper, DropMessage};
@@ -34,12 +35,12 @@ pub struct Collector {
     trigger: Trigger,
     dropper: BackgroundDropper,
     async_gc_notifier: Sender<()>,
-    tracked_data: RwLock<TrackedData>,
+    tracked_data: TrackedData,
 }
 
 #[derive(Debug)]
 struct TrackedData {
-    collection_number: u64,
+    current_collection_number: AtomicU64,
     data: HashSet<Arc<GcData>>,
     handles: HashSet<Arc<GcHandle>>,
 }
@@ -67,6 +68,18 @@ impl PartialEq for GcData {
 
 impl Eq for GcData {}
 
+impl Ord for GcData {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        Ord::cmp(&self.unique_id, &other.unique_id)
+    }
+}
+
+impl PartialOrd for GcData {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        PartialOrd::partial_cmp(&self.unique_id, &other.unique_id)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct GcHandle {
     unique_id: u64,
@@ -89,6 +102,18 @@ impl PartialEq for GcHandle {
 
 impl Eq for GcHandle {}
 
+impl Ord for GcHandle {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        Ord::cmp(&self.unique_id, &other.unique_id)
+    }
+}
+
+impl PartialOrd for GcHandle {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        PartialOrd::partial_cmp(&self.unique_id, &other.unique_id)
+    }
+}
+
 // TODO(issue): https://github.com/Others/shredder/issues/7
 
 impl Collector {
@@ -101,11 +126,16 @@ impl Collector {
             trigger: Trigger::default(),
             dropper: BackgroundDropper::new(),
             async_gc_notifier,
-            tracked_data: RwLock::new(TrackedData {
-                collection_number: 1,
+            tracked_data: TrackedData {
+                // This is janky, but we subtract one from the collection number
+                // to get a previous collection number in `do_collect`
+                //
+                // We also use 0 as a sentinel value for newly allocated thus
+                // That together implies we need to start the collection number sequence at 2, not 1
+                current_collection_number: AtomicU64::new(2),
                 data: HashSet::new(),
                 handles: HashSet::new(),
-            }),
+            },
         });
 
         // The async Gc thread deals with background Gc'ing
@@ -130,7 +160,6 @@ impl Collector {
         let (gc_data_ptr, heap_ptr) = GcAllocation::allocate(data);
         let lockout = Lockout::new();
 
-        let mut tracked_data = self.tracked_data.write();
         let new_data = Arc::new(GcData {
             unique_id: self.get_unique_id(),
             underlying_allocation: gc_data_ptr,
@@ -138,16 +167,25 @@ impl Collector {
             deallocated: AtomicBool::new(false),
             last_marked: AtomicU64::new(0),
         });
-        tracked_data.data.insert(new_data.clone());
 
         let new_handle = Arc::new(GcHandle {
             unique_id: self.get_unique_id(),
-            underlying_data: new_data,
+            underlying_data: new_data.clone(),
             lockout,
             last_non_rooted: AtomicU64::new(0),
         });
-        tracked_data.handles.insert(new_handle.clone());
-        drop(tracked_data);
+
+        {
+            // Insert handle before data -- don't want the data to be observable before there is a relevant handle
+            // Technically this does not matter in the current implementation, but good to be future proof :)
+            let handle_guard = self.tracked_data.handles.guard();
+            self.tracked_data
+                .handles
+                .insert(new_handle.clone(), &handle_guard);
+
+            let data_guard = self.tracked_data.data.guard();
+            self.tracked_data.data.insert(new_data, &data_guard);
+        }
 
         let res = (InternalGcRef::new(new_handle), heap_ptr);
 
@@ -167,23 +205,17 @@ impl Collector {
     }
 
     pub fn drop_handle(&self, handle: &InternalGcRef) {
-        // FIXME: Break up locks so we can take a read lock here
-        let mut tracked_data = self.tracked_data.write();
-        tracked_data.handles.remove(&handle.handle_ref);
+        let handle_guard = self.tracked_data.handles.guard();
+        self.tracked_data
+            .handles
+            .remove(&handle.handle_ref, &handle_guard);
 
         // NOTE: We probably don't want to collect here since it can happen while we are dropping from a previous collection
         // self.async_gc_chan.lock().send(());
     }
 
     pub fn clone_handle(&self, handle: &InternalGcRef) -> InternalGcRef {
-        // FIXME: Break up locks so we can take a read lock here
-        // Note: On panic, the lock is freed normally -- which is what we want
-        let mut gc_data = self.tracked_data.write();
-
-        // Technically this safety check is unnecessary, but it's pretty fast and will catch some bad behavior
-        if !gc_data.handles.contains(&handle.handle_ref) {
-            panic!("Tried to clone a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
-        }
+        let handle_guard = self.tracked_data.handles.guard();
 
         let new_handle = Arc::new(GcHandle {
             unique_id: self.get_unique_id(),
@@ -192,7 +224,9 @@ impl Collector {
             last_non_rooted: AtomicU64::new(0),
         });
 
-        gc_data.handles.insert(new_handle.clone());
+        self.tracked_data
+            .handles
+            .insert(new_handle.clone(), &handle_guard);
 
         InternalGcRef {
             handle_ref: new_handle,
@@ -215,13 +249,11 @@ impl Collector {
     }
 
     pub fn tracked_data_count(&self) -> usize {
-        let gc_data = self.tracked_data.read();
-        gc_data.data.len()
+        self.tracked_data.data.len()
     }
 
     pub fn handle_count(&self) -> usize {
-        let gc_data = self.tracked_data.read();
-        gc_data.handles.len()
+        self.tracked_data.handles.len()
     }
 
     pub fn set_gc_trigger_percent(&self, new_trigger_percent: f32) {
@@ -242,9 +274,9 @@ impl Collector {
     pub fn check_then_collect(&self) -> bool {
         let gc_guard = self.gc_lock.lock();
 
-        let gc_data = self.tracked_data.upgradable_read();
-        if self.trigger.should_collect(gc_data.data.len()) {
-            self.do_collect(gc_guard, RwLockUpgradableReadGuard::upgrade(gc_data));
+        let current_data_count = self.tracked_data.data.len();
+        if self.trigger.should_collect(current_data_count) {
+            self.do_collect(gc_guard);
             true
         } else {
             false
@@ -253,34 +285,47 @@ impl Collector {
 
     pub fn collect(&self) {
         let gc_guard = self.gc_lock.lock();
-        let gc_data = self.tracked_data.write();
-        self.do_collect(gc_guard, gc_data);
+        self.do_collect(gc_guard);
     }
 
     // TODO(issue): https://github.com/Others/shredder/issues/13
     // TODO: Remove the vectors we allocate here with an intrusive linked list
     // TODO: Reconsider the lockout mechanism (is the memory usage too high?)
     #[allow(clippy::shadow_unrelated)]
-    fn do_collect(
-        &self,
-        gc_guard: MutexGuard<()>,
-        mut tracked_data_guard: RwLockWriteGuard<TrackedData>,
-    ) {
+    fn do_collect(&self, gc_guard: MutexGuard<()>) {
+        // Be careful modifying this method. The tracked data and tracked handles can change underneath us
+        // Currently the state is this, as far as I can tell:
+        // - New handles are conservatively seen as roots if seen at all while we are touching handles
+        // (there is nowhere a new "secret root" can be created and then the old root stashed and seen as non-rooted)
+        // - New data is treated as a special case, and only deallocated if it existed at the start of collection
+        // - Deleted handles cannot make the graph "more connected" if the deletion was not observed
+
         trace!("Beginning collection");
 
-        tracked_data_guard.collection_number += 1;
-        let current_collection = tracked_data_guard.collection_number;
+        let current_collection = self
+            .tracked_data
+            .current_collection_number
+            .load(Ordering::SeqCst);
+
+        let data_guard = self.tracked_data.data.guard();
+        let handle_guard = self.tracked_data.handles.guard();
+
+        // Here we synchronize destructors: this ensures that handles in objects in the background thread are dropped
+        // Otherwise we'd see those handles as rooted and keep them around
+        self.synchronize_destructors();
 
         // The warrant system prevents us from scanning in-use data
         let mut warrants: Vec<ExclusiveWarrant> = Vec::new();
 
-        let tracked_data = &mut *tracked_data_guard;
-        let tracked_items = &mut tracked_data.data;
-
         // eprintln!("tracked data {:?}", tracked_data);
         // eprintln!("tracked handles {:?}", tracked_handles);
 
-        for data in tracked_items.iter() {
+        for data in self.tracked_data.data.iter(&data_guard) {
+            if data.last_marked.load(Ordering::SeqCst) == 0 {
+                data.last_marked
+                    .store(current_collection - 1, Ordering::SeqCst);
+            }
+
             if let Some(warrant) = data.lockout.get_exclusive_warrant() {
                 // Save that warrant so things can't shift around under us
                 warrants.push(warrant);
@@ -298,9 +343,8 @@ impl Collector {
             }
         }
 
-        let tracked_handles = &tracked_data.handles;
         let mut roots = Vec::new();
-        for handle in tracked_handles {
+        for handle in self.tracked_data.handles.iter(&handle_guard) {
             // If the `last_non_rooted` number was not now, then it is a root
             if handle.last_non_rooted.load(Ordering::SeqCst) != current_collection {
                 roots.push(handle.clone());
@@ -318,45 +362,56 @@ impl Collector {
                 data.last_marked.store(current_collection, Ordering::SeqCst);
 
                 data.underlying_allocation.scan(|h| {
-                    dfs_stack.push(h.handle_ref);
+                    if h.handle_ref
+                        .underlying_data
+                        .last_marked
+                        .load(Ordering::SeqCst)
+                        != current_collection
+                    {
+                        dfs_stack.push(h.handle_ref);
+                    }
                 });
             }
         }
 
-        let tracked_handles = &mut tracked_data.handles;
-        tracked_items.retain(|data| {
-            // If this is true, we just marked this data
-            if data.last_marked.load(Ordering::SeqCst) == current_collection {
-                // so retain it
-                true
-            } else {
-                // Otherwise we didn't mark it and it should be deallocated
-
-                // eprintln!("deallocating {:?}", data_ptr);
-
-                // FIXME: Experiment with moving the tracked handle cleanup and dropping to a loop
-                //        after releasing the other lock
-                data.underlying_allocation.scan(|h| {
-                    tracked_handles.remove(&h.handle_ref);
-                });
-
-                // Send it to the drop thread to be dropped
-                let drop_msg = DropMessage::DataToDrop(data.clone());
-                if let Err(e) = self.dropper.send_msg(drop_msg) {
-                    error!("Error sending to drop thread {}", e);
+        self.tracked_data.data.retain(
+            |data| {
+                // Mark the new data as in use for now
+                if data.last_marked.load(Ordering::SeqCst) == 0 {
+                    data.last_marked.store(current_collection, Ordering::SeqCst);
                 }
 
-                // Note: It's okay to send all the data before we've removed it from the map
-                // The destructor manages the `destructed` flag so we can never access free'd data
+                // If this is true, we just marked this data
+                if data.last_marked.load(Ordering::SeqCst) == current_collection {
+                    // so retain it
+                    true
+                } else {
+                    // Otherwise we didn't mark it and it should be deallocated
 
-                // Don't retain this data
-                false
-            }
-        });
-        drop(tracked_data_guard);
+                    // eprintln!("deallocating {:?}", data_ptr);
+
+                    // Send it to the drop thread to be dropped
+                    let drop_msg = DropMessage::DataToDrop(data.clone());
+                    if let Err(e) = self.dropper.send_msg(drop_msg) {
+                        error!("Error sending to drop thread {}", e);
+                    }
+
+                    // Note: It's okay to send all the data before we've removed it from the map
+                    // The destructor manages the `destructed` flag so we can never access free'd data
+
+                    // Don't retain this data
+                    false
+                }
+            },
+            &data_guard,
+        );
 
         self.trigger
             .set_data_count_after_collection(self.tracked_data_count());
+
+        self.tracked_data
+            .current_collection_number
+            .fetch_add(1, Ordering::SeqCst);
 
         drop(gc_guard);
 

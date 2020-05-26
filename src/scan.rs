@@ -125,6 +125,8 @@ impl<'a> Scanner<'a> {
 // This is a fundamental implementation, since it's how GcInternalHandles make it into the Scanner
 // Safety: The implementation is built around this, so it's by definition safe
 unsafe impl<T: Scan> Scan for Gc<T> {
+    #[allow(clippy::inline_always)]
+    #[inline(always)]
     fn scan(&self, scanner: &mut Scanner) {
         scanner.add_internal_handle(self)
     }
@@ -134,11 +136,13 @@ unsafe impl<T: Scan> GcSafe for Gc<T> {}
 // References can never own Gc<_> so they must have no-op scan implementations
 // Safety: References have no destructors, so they are okay to be GcSafe (since the `scan` impl is empty)
 unsafe impl<T> Scan for &T {
+    #[inline(always)]
     fn scan(&self, _: &mut Scanner) {}
 }
 unsafe impl<T> GcSafe for &T {}
 
 unsafe impl<T> Scan for &mut T {
+    #[inline(always)]
     fn scan(&self, _: &mut Scanner) {}
 }
 unsafe impl<T> GcSafe for &mut T {}
@@ -157,6 +161,7 @@ macro_rules! impl_empty_scan_for_send_type {
     ( $t:ty ) => {
         unsafe impl GcSafe for $t where $t: Send {}
         unsafe impl Scan for $t {
+            #[inline(always)]
             fn scan(&self, _: &mut Scanner) {}
         }
     };
@@ -247,6 +252,7 @@ unsafe impl<K: Scan, V: Scan, S: BuildHasher> Scan for HashMap<K, V, S> {
 unsafe impl<K: GcSafe, V: GcSafe, S: BuildHasher> GcSafe for HashMap<K, V, S> {}
 
 unsafe impl<T: Scan> Scan for RefCell<T> {
+    #[inline]
     fn scan(&self, scanner: &mut Scanner) {
         // It's an error if this fails
         if let Ok(reference) = self.try_borrow() {
@@ -260,6 +266,7 @@ unsafe impl<T: Scan> Scan for RefCell<T> {
 unsafe impl<T: GcSafe> GcSafe for RefCell<T> {}
 
 unsafe impl<T: Scan> Scan for Option<T> {
+    #[inline]
     fn scan(&self, scanner: &mut Scanner) {
         if let Some(v) = self {
             scanner.scan(v);
@@ -269,6 +276,7 @@ unsafe impl<T: Scan> Scan for Option<T> {
 unsafe impl<T: GcSafe> GcSafe for Option<T> {}
 
 unsafe impl<T: Scan> Scan for Mutex<T> {
+    #[inline]
     fn scan(&self, scanner: &mut Scanner) {
         // TODO(issue): https://github.com/Others/shredder/issues/6
 
@@ -282,6 +290,7 @@ unsafe impl<T: Scan> Scan for Mutex<T> {
 unsafe impl<T: GcSafe> GcSafe for Mutex<T> {}
 
 unsafe impl<T: Scan> Scan for RwLock<T> {
+    #[inline]
     fn scan(&self, scanner: &mut Scanner) {
         // TODO(issue): https://github.com/Others/shredder/issues/6
 
