@@ -5,21 +5,21 @@
 //! of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
 //!
 //! `shredder` has the following features:
-//! - fairly ergonomic: no need to manually manage roots, just a regular smart pointer
-//! - destructors: no need for finalization, your destructors are seamlessly run
-//! - ready for fearless concurrency: works in multi-threaded contexts
 //! - safe: detects error conditions on the fly, and protects you from undefined behavior
+//! - ergonomic: no need to manually manage roots, just a regular smart pointer
+//! - ready for fearless concurrency: works in multi-threaded contexts
 //! - limited stop-the world: regular processing will rarely be interrupted
-//! - concurrent collection: collection happens in the background
-//! - concurrent destruction: destructors are run in the background
+//! - seamless destruction: regular `drop` for `'static` data
+//! - clean finalization: optional `finalize` for non-`'static` data
+//! - concurrent collection: collection happens in the background, improving performance
+//! - concurrent destruction: destructors are run in the background, improving performance
 //!
 //! `shredder` has the following limitations:
-//! - guarded access: `Gc` requires acquiring a guard
-//! - multiple collectors: multiple collectors do not co-operate
+//! - guarded access: accessing `Gc` data requires acquiring a guard
+//! - multiple collectors: only a single global collector is supported
 //! - can't handle `Rc`/`Arc`: requires all `Gc` objects have straightforward ownership semantics
-//! - non static data: `Gc` cannot handle non 'static data (fix WIP)
-//! - no no-std support: The collector requires threading and other `std` features (fix WIP)
-//! - non-optimal performance: The collector needs to be optimized and parallelized further (fix WIP)
+//! - further parallelization: The collector needs to be optimized and parallelized further (will fix!)
+//! - no no-std support: The collector requires threading and other `std` features (will fix!)
 
 // We love docs here
 #![deny(missing_docs)]
@@ -48,6 +48,7 @@ extern crate log;
 extern crate rental;
 
 mod collector;
+mod finalize;
 mod lockout;
 mod scan;
 mod smart_ptr;
@@ -57,23 +58,24 @@ use std::sync::Mutex;
 
 use collector::COLLECTOR;
 
-pub use scan::{GcSafe, GcSafeWrapper, Scan, Scanner};
+pub use finalize::Finalize;
+pub use scan::{GcSafe, GcSafeWrapper, RMut, Scan, Scanner, R};
 pub use smart_ptr::{Gc, GcGuard, GcRef, GcRefMut};
 
 // Re-export the Scan derive
 pub use shredder_derive::Scan;
 
-/// `GRefCell` is a convenient alias for `Gc<RefCell<T>>`
+/// A convenient alias for `Gc<RefCell<T>>`.
 /// Note that `Gc<RefCell<T>>` has additional specialized methods for working with `RefCell`s inside
-/// `Gc`s
+/// `Gc`s.
 pub type GRefCell<T> = Gc<RefCell<T>>;
 
-/// `GMutex` is a convenient alias for `Gc<Mutex<T>>`
+/// A convenient alias for `Gc<Mutex<T>>`.
 /// Note that `Gc<Mutex<T>>` has additional specialized methods for working with `Mutex`s inside
-/// `Gc`s
+/// `Gc`s.
 pub type GMutex<T> = Gc<Mutex<T>>;
 
-/// Returns how many underlying allocations are currently allocated
+/// Returns how many underlying allocations are currently allocated.
 ///
 /// # Example
 /// ```
@@ -87,7 +89,7 @@ pub fn number_of_tracked_allocations() -> usize {
     COLLECTOR.tracked_data_count()
 }
 
-/// Returns how many `Gc`s are currently in use
+/// Returns how many `Gc`s are currently in use.
 ///
 /// # Example
 /// ```
@@ -101,12 +103,15 @@ pub fn number_of_active_handles() -> usize {
     COLLECTOR.handle_count()
 }
 
+/// Sets the percent more data that'll trigger collection.
+///
 /// `shredders` collection automatically triggers when:
 /// ```text
 ///     allocations > allocations_after_last_collection * (1 + gc_trigger_percent)
 /// ```
-/// The default value of `gc_trigger_percent` is 0.75, but `set_gc_trigger_percent` lets you configure
-/// it yourself. Only values 0 or greater are allowed (NaNs and negative values will cause a panic)
+/// The default value of `gc_trigger_percent` is 0.75, but `set_gc_trigger_percent` lets you
+/// configure it yourself. Only values 0 or greater are allowed.
+/// (NaNs and negative values will cause a panic.)
 ///
 /// # Example
 /// ```
@@ -123,7 +128,7 @@ pub fn set_gc_trigger_percent(percent: f32) {
     COLLECTOR.set_gc_trigger_percent(percent)
 }
 
-/// `collect` allows you to manually run a collection, ignoring the heuristic that governs normal
+/// A function for manually running a collection, ignoring the heuristic that governs normal
 /// garbage collector operations. This can be an extremely slow operation, since the algorithm is
 /// designed to be run in the background, while this method runs it on the thread that calls the
 /// method. Additionally, you may end up blocking waiting to collect, since `shredder` doesn't allow
@@ -138,9 +143,8 @@ pub fn collect() {
     COLLECTOR.collect();
 }
 
-/// `synchronize_destructors` blocks the current thread until the background thread has finished
-/// running the destructors for all data that was marked as garbage at the point this method was
-/// called.
+/// Block the current thread until the background thread has finished running the destructors for
+/// all data that was marked as garbage at the point this method was called.
 ///
 /// This method is most useful for testing, as well as cleaning up at the termination of your
 /// program.
@@ -159,8 +163,9 @@ pub fn synchronize_destructors() {
     COLLECTOR.synchronize_destructors()
 }
 
-/// `run_with_gc_cleanup` is a convenience method for helping ensure your destructors are run. While
-/// in Rust you can never assume that destructors run, but using this method helps `shredder` not
+/// A convenience method for helping ensure your destructors are run.
+///
+/// In Rust you can never assume that destructors run, but using this method helps `shredder` not
 /// contribute to that problem.
 /// # Example
 /// ```

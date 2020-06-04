@@ -1,25 +1,26 @@
-shredder
-========
+ shredder
+ ========
 `shredder` is a library providing a garbage collected smart pointer: `Gc`.
 This is useful for times where you want shared access to some data, but the structure
 of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
 
 `shredder` has the following features:
-- fairly ergonomic: no need to manually manage roots, just a regular smart pointer
-- destructors: no need for finalization, your destructors are seamlessly run
-- ready for fearless concurrency: works in multi-threaded contexts
 - safe: detects error conditions on the fly, and protects you from undefined behavior
+- ergonomic: no need to manually manage roots, just a regular smart pointer
+- ready for fearless concurrency: works in multi-threaded contexts
 - limited stop-the world: regular processing will rarely be interrupted
-- concurrent collection: collection happens in the background
-- concurrent destruction: destructors are run in the background
+- seamless destruction: regular `drop` for `'static` data
+- clean finalization: optional `finalize` for non-`'static` data
+- concurrent collection: collection happens in the background, improving performance
+- concurrent destruction: destructors are run in the background, improving performance
 
 `shredder` has the following limitations:
-- guarded access: `Gc` requires acquiring a guard 
-- multiple collectors: multiple collectors do not co-operate
+- guarded access: accessing `Gc` data requires acquiring a guard
+- multiple collectors: only a single global collector is supported
 - can't handle `Rc`/`Arc`: requires all `Gc` objects have straightforward ownership semantics
-- non static data: `Gc` cannot handle non 'static data (fix WIP)
-- no no-std support: The collector requires threading and other `std` features (fix WIP)
-- non-optimal performance: The collector needs to be optimized and parallelized further (fix WIP)
+- optimized for speed, not memory use: `Gc` is small, but internal data-structures can grow large (will fix!)
+- further parallelization: The collector needs to be optimized and parallelized further (will fix!)
+- no no-std support: The collector requires threading and other `std` features (will fix!)
 
 Getting Started
 ---------------
@@ -37,8 +38,7 @@ struct Node {
     directed_edges: Vec<Gc<RefCell<Node>>>,
 }
 
-#[test]
-fn _main() {
+fn main() {
     // Using `run_with_gc_cleanup` is good practice, since it helps ensure destructors are run
     run_with_gc_cleanup(|| {
         let a = Gc::new(RefCell::new(Node {
@@ -54,6 +54,7 @@ fn _main() {
         // Usually would need `get` for `Gc` data, but `RefCell` is a special case
         a.borrow_mut().directed_edges.push(b.clone());
         b.borrow_mut().directed_edges.push(a.clone());
+        // We now have cyclical data!
     });
     // Everything was cleaned up!
     assert_eq!(number_of_tracked_allocations(), 0);

@@ -10,27 +10,70 @@ use stable_deref_trait::StableDeref;
 
 use crate::collector::{InternalGcRef, COLLECTOR};
 use crate::lockout::Warrant;
-use crate::Scan;
+use crate::{Finalize, Scan};
 
-/// `Gc` is a smart-pointer for data tracked by `shredder` garbage collector
+/// A smart-pointer for data tracked by `shredder` garbage collector
 pub struct Gc<T: Scan> {
     backing_handle: InternalGcRef,
     direct_ptr: *const T,
 }
 
 impl<T: Scan> Gc<T> {
-    /// Create a new `Gc` containing the given data
+    /// Create a new `Gc` containing the given data.
+    /// `T: 'static` in order to create a `Gc<T>` with this method.
+    /// If your `T` is not static, consider `new_with_finalizer`.
+    ///
+    /// When this data is garbage collected, its `drop` implementation will be run.
+    ///
+    /// It is possible for this data not to be collected before the program terminates, or for
+    /// the program to terminate before the background thread runs its destructor. So be careful
+    /// when relying on this guarantee.
     pub fn new(v: T) -> Self
     where
         T: 'static,
     {
-        let (handle, ptr) = COLLECTOR.track_data(v);
+        let (handle, ptr) = COLLECTOR.track_with_drop(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
         }
     }
 
+    /// Create a new `Gc` containing the given data. (But specifying not to run its destructor.)
+    /// This is useful because `T: 'static` is no longer necessary!
+    ///
+    /// When this data is garbage collected, its `drop` implementation will NOT be run.
+    /// Be careful using this method! It can lead to memory leaks!
+    pub fn new_no_drop(v: T) -> Self {
+        let (handle, ptr) = COLLECTOR.track_with_no_drop(v);
+        Self {
+            backing_handle: handle,
+            direct_ptr: ptr,
+        }
+    }
+
+    /// Create a new `Gc` containing the given data. (But specifying to call `finalize` on it
+    /// instead of running its destructor.)
+    /// This is useful because `T: 'static` is no longer necessary!
+    ///
+    /// As long as `finalize` does what you think it does, this is probably what you want for
+    /// non-'static data!
+    ///
+    /// It is possible for this data not to be collected before the program terminates, or for
+    /// the program to terminate before the background thread runs `finalize`. So be careful!
+    pub fn new_with_finalizer(v: T) -> Self
+    where
+        T: Finalize,
+    {
+        let (handle, ptr) = COLLECTOR.track_with_finalization(v);
+        Self {
+            backing_handle: handle,
+            direct_ptr: ptr,
+        }
+    }
+
+    /// `get` lets you get a `GcGuard`, which will deref to the underlying data.
+    ///
     /// `get` is used to get a `GcGuard`. This is usually what you want when accessing non-`Sync`
     /// data in a `Gc`. The API is very analogous to the `Mutex` API. It may block if the data is
     /// being scanned
@@ -68,8 +111,7 @@ unsafe impl<T: Scan> Send for Gc<T> where T: Sync + Send {}
 
 impl<T: Scan> Drop for Gc<T> {
     fn drop(&mut self) {
-        // This may trigger during Gc-drop, but it'll do nothing and everything will be fine
-        COLLECTOR.drop_handle(&self.backing_handle);
+        self.backing_handle.invalidate();
     }
 }
 
@@ -362,8 +404,8 @@ where
     }
 }
 
-/// A `GcGuard` lets you access the underlying data of a `Gc`
-/// It exists as data needs protection from being scanned while it's being concurrently modified
+/// A guard object that lets you access the underlying data of a `Gc`.
+/// It exists as data needs protection from being scanned while it's being concurrently modified.
 pub struct GcGuard<'a, T: Scan> {
     gc_ptr: &'a Gc<T>,
     _warrant: Warrant,

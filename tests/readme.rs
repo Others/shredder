@@ -27,6 +27,7 @@ fn _main() {
         // Usually would need `get` for `Gc` data, but `RefCell` is a special case
         a.borrow_mut().directed_edges.push(b.clone());
         b.borrow_mut().directed_edges.push(a.clone());
+        // We now have cyclical data!
     });
     // Everything was cleaned up!
     assert_eq!(number_of_tracked_allocations(), 0);

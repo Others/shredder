@@ -8,16 +8,19 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::spawn;
 
+use crossbeam::queue::SegQueue;
 use crossbeam::Sender;
-use flurry::HashSet;
+use dashmap::DashMap;
+use dynqueue::DynQueue;
 use once_cell::sync::Lazy;
 use parking_lot::{Mutex, MutexGuard};
+use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 
 use crate::collector::alloc::GcAllocation;
 use crate::collector::dropper::{BackgroundDropper, DropMessage};
 use crate::collector::trigger::Trigger;
 use crate::lockout::{ExclusiveWarrant, Lockout, Warrant};
-use crate::Scan;
+use crate::{Finalize, Scan};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct InternalGcRef {
@@ -26,6 +29,10 @@ pub struct InternalGcRef {
 impl InternalGcRef {
     pub(crate) fn new(handle_ref: Arc<GcHandle>) -> Self {
         Self { handle_ref }
+    }
+
+    pub(crate) fn invalidate(&self) {
+        COLLECTOR.drop_handle(self);
     }
 }
 
@@ -41,8 +48,8 @@ pub struct Collector {
 #[derive(Debug)]
 struct TrackedData {
     current_collection_number: AtomicU64,
-    data: HashSet<Arc<GcData>>,
-    handles: HashSet<Arc<GcHandle>>,
+    data: DashMap<Arc<GcData>, ()>,
+    handles: DashMap<Arc<GcHandle>, ()>,
 }
 
 #[derive(Debug)]
@@ -51,6 +58,8 @@ pub(crate) struct GcData {
     underlying_allocation: GcAllocation,
     lockout: Arc<Lockout>,
     deallocated: AtomicBool,
+    // During what collection was this last marked?
+    //     0 if this is a new piece of data
     last_marked: AtomicU64,
 }
 
@@ -85,6 +94,8 @@ pub(crate) struct GcHandle {
     unique_id: u64,
     underlying_data: Arc<GcData>,
     lockout: Arc<Lockout>,
+    // During what collection was this last found in a piece of GcData?
+    //     0 if this is a new piece of data
     last_non_rooted: AtomicU64,
 }
 
@@ -130,11 +141,12 @@ impl Collector {
                 // This is janky, but we subtract one from the collection number
                 // to get a previous collection number in `do_collect`
                 //
-                // We also use 0 as a sentinel value for newly allocated thus
-                // That together implies we need to start the collection number sequence at 2, not 1
+                // We also use 0 as a sentinel value for newly allocated data
+                //
+                // Together that implies we need to start the collection number sequence at 2, not 1
                 current_collection_number: AtomicU64::new(2),
-                data: HashSet::new(),
-                handles: HashSet::new(),
+                data: DashMap::new(),
+                handles: DashMap::new(),
             },
         });
 
@@ -156,8 +168,29 @@ impl Collector {
         self.monotonic_counter.fetch_add(1, Ordering::SeqCst)
     }
 
-    pub fn track_data<T: Scan + 'static>(&self, data: T) -> (InternalGcRef, *const T) {
-        let (gc_data_ptr, heap_ptr) = GcAllocation::allocate(data);
+    pub fn track_with_drop<T: Scan + 'static>(&self, data: T) -> (InternalGcRef, *const T) {
+        let (gc_data_ptr, heap_ptr) = GcAllocation::allocate_with_drop(data);
+        self.track(gc_data_ptr, heap_ptr)
+    }
+
+    pub fn track_with_no_drop<T: Scan>(&self, data: T) -> (InternalGcRef, *const T) {
+        let (gc_data_ptr, heap_ptr) = GcAllocation::allocate_no_drop(data);
+        self.track(gc_data_ptr, heap_ptr)
+    }
+
+    pub fn track_with_finalization<T: Finalize + Scan>(
+        &self,
+        data: T,
+    ) -> (InternalGcRef, *const T) {
+        let (gc_data_ptr, heap_ptr) = GcAllocation::allocate_with_finalization(data);
+        self.track(gc_data_ptr, heap_ptr)
+    }
+
+    fn track<T: Scan>(
+        &self,
+        gc_data_ptr: GcAllocation,
+        heap_ptr: *const T,
+    ) -> (InternalGcRef, *const T) {
         let lockout = Lockout::new();
 
         let new_data = Arc::new(GcData {
@@ -177,14 +210,10 @@ impl Collector {
 
         {
             // Insert handle before data -- don't want the data to be observable before there is a relevant handle
-            // Technically this does not matter in the current implementation, but good to be future proof :)
-            let handle_guard = self.tracked_data.handles.guard();
-            self.tracked_data
-                .handles
-                .insert(new_handle.clone(), &handle_guard);
+            // TODO: Ensure our map really promises these will appear in order
+            self.tracked_data.handles.insert(new_handle.clone(), ());
 
-            let data_guard = self.tracked_data.data.guard();
-            self.tracked_data.data.insert(new_data, &data_guard);
+            self.tracked_data.data.insert(new_data, ());
         }
 
         let res = (InternalGcRef::new(new_handle), heap_ptr);
@@ -205,18 +234,13 @@ impl Collector {
     }
 
     pub fn drop_handle(&self, handle: &InternalGcRef) {
-        let handle_guard = self.tracked_data.handles.guard();
-        self.tracked_data
-            .handles
-            .remove(&handle.handle_ref, &handle_guard);
+        self.tracked_data.handles.remove(&handle.handle_ref);
 
         // NOTE: We probably don't want to collect here since it can happen while we are dropping from a previous collection
         // self.async_gc_chan.lock().send(());
     }
 
     pub fn clone_handle(&self, handle: &InternalGcRef) -> InternalGcRef {
-        let handle_guard = self.tracked_data.handles.guard();
-
         let new_handle = Arc::new(GcHandle {
             unique_id: self.get_unique_id(),
             underlying_data: handle.handle_ref.underlying_data.clone(),
@@ -224,9 +248,7 @@ impl Collector {
             last_non_rooted: AtomicU64::new(0),
         });
 
-        self.tracked_data
-            .handles
-            .insert(new_handle.clone(), &handle_guard);
+        self.tracked_data.handles.insert(new_handle.clone(), ());
 
         InternalGcRef {
             handle_ref: new_handle,
@@ -235,8 +257,8 @@ impl Collector {
 
     #[allow(clippy::unused_self)]
     pub fn get_data_warrant(&self, handle: &InternalGcRef) -> Warrant {
-        // Note: We do not take the lock here
-        // This check is only necessary in the destructor thread, and it will always set a flag before deallocating data
+        // This check is only necessary in the destructors
+        // The destructor thread will always set the `deallocated` flag before deallocating data
         let data_deallocated = handle
             .handle_ref
             .underlying_data
@@ -261,7 +283,7 @@ impl Collector {
     }
 
     pub fn synchronize_destructors(&self) {
-        let (sender, reciever) = crossbeam::bounded(0);
+        let (sender, reciever) = crossbeam::bounded(1);
         let drop_msg = DropMessage::SyncUp(sender);
         {
             self.dropper
@@ -290,7 +312,7 @@ impl Collector {
 
     // TODO(issue): https://github.com/Others/shredder/issues/13
     // TODO: Remove the vectors we allocate here with an intrusive linked list
-    // TODO: Reconsider the lockout mechanism (is the memory usage too high?)
+    // TODO: Optimize memory overhead
     #[allow(clippy::shadow_unrelated)]
     fn do_collect(&self, gc_guard: MutexGuard<()>) {
         // Be careful modifying this method. The tracked data and tracked handles can change underneath us
@@ -307,20 +329,21 @@ impl Collector {
             .current_collection_number
             .load(Ordering::SeqCst);
 
-        let data_guard = self.tracked_data.data.guard();
-        let handle_guard = self.tracked_data.handles.guard();
-
         // Here we synchronize destructors: this ensures that handles in objects in the background thread are dropped
-        // Otherwise we'd see those handles as rooted and keep them around
+        // Otherwise we'd see those handles as rooted and keep them around.
+        // This makes a lot of sense in the background thread (since it's totally async),
+        // but may slow direct calls to `collect`.
         self.synchronize_destructors();
 
         // The warrant system prevents us from scanning in-use data
-        let mut warrants: Vec<ExclusiveWarrant> = Vec::new();
+        let warrants: SegQueue<ExclusiveWarrant> = SegQueue::new();
 
         // eprintln!("tracked data {:?}", tracked_data);
         // eprintln!("tracked handles {:?}", tracked_handles);
+        self.tracked_data.data.iter().par_bridge().for_each(|ele| {
+            let data = ele.key();
 
-        for data in self.tracked_data.data.iter(&data_guard) {
+            // If data.last_marked == 0, then it is new data. Update that we've seen this data
             if data.last_marked.load(Ordering::SeqCst) == 0 {
                 data.last_marked
                     .store(current_collection - 1, Ordering::SeqCst);
@@ -341,10 +364,11 @@ impl Collector {
                 // If we can't get the warrant, then this data must be in use, so we can mark it
                 data.last_marked.store(current_collection, Ordering::SeqCst);
             }
-        }
+        });
 
         let mut roots = Vec::new();
-        for handle in self.tracked_data.handles.iter(&handle_guard) {
+        for ele in self.tracked_data.handles.iter() {
+            let handle = ele.key();
             // If the `last_non_rooted` number was not now, then it is a root
             if handle.last_non_rooted.load(Ordering::SeqCst) != current_collection {
                 roots.push(handle.clone());
@@ -353,58 +377,68 @@ impl Collector {
 
         // eprintln!("roots {:?}", roots);
 
-        let mut dfs_stack = roots;
-        while let Some(handle) = dfs_stack.pop() {
+        let dfs_stack = DynQueue::new(roots);
+        dfs_stack.into_par_iter().for_each(|(queue, handle)| {
             let data = &handle.underlying_data;
 
-            // Essential note! Since all non warranted data is automatically marked, we will never accidently scan non-warranted data here
-            if data.last_marked.load(Ordering::SeqCst) != current_collection {
-                data.last_marked.store(current_collection, Ordering::SeqCst);
+            // If this data is new, we don't want to `Scan` it, since we may not have its Lockout
+            // Any handles inside this could not of been seen in step 1, so they'll be rooted anyway
+            if data.last_marked.load(Ordering::SeqCst) != 0 {
+                // Essential note! All non-new non-warranted data is automatically marked
+                // Thus we will never accidently scan non-warranted data here
+                let previous_mark = data.last_marked.swap(current_collection, Ordering::SeqCst);
 
-                data.underlying_allocation.scan(|h| {
-                    if h.handle_ref
-                        .underlying_data
-                        .last_marked
-                        .load(Ordering::SeqCst)
-                        != current_collection
-                    {
-                        dfs_stack.push(h.handle_ref);
-                    }
-                });
-            }
-        }
-
-        self.tracked_data.data.retain(
-            |data| {
-                // Mark the new data as in use for now
-                if data.last_marked.load(Ordering::SeqCst) == 0 {
+                // Since we've done an automic swap, we know we've already scanned this iff it was marked
+                // (excluding data marked because we couldn't get its warrant, who's handles would be seen as roots)
+                // This stops us for scanning data more than once and, crucially, concurrently scanning the same data
+                if previous_mark != current_collection {
                     data.last_marked.store(current_collection, Ordering::SeqCst);
+
+                    data.underlying_allocation.scan(|h| {
+                        if h.handle_ref
+                            .underlying_data
+                            .last_marked
+                            .load(Ordering::SeqCst)
+                            != current_collection
+                        {
+                            queue.enqueue(h.handle_ref);
+                        }
+                    });
+                }
+            }
+        });
+        // We're done scanning things, and have established what is marked. Release the warrants
+        drop(warrants);
+
+        // FIXME: Is par_retain  a thing that could exist?
+        // Note: we cannot just do a parallel iteration with a remove inside the loop
+        // Why? Deadlocks in dashmap :D
+        self.tracked_data.data.retain(|data, _| {
+            // Mark the new data as in use for now
+            if data.last_marked.load(Ordering::SeqCst) == 0 {
+                data.last_marked.store(current_collection, Ordering::SeqCst);
+            }
+
+            // If this is true, we just marked this data
+            if data.last_marked.load(Ordering::SeqCst) == current_collection {
+                // so retain it
+                true
+            } else {
+                // Otherwise we didn't mark it and it should be deallocated
+                // eprintln!("deallocating {:?}", data_ptr);
+                // Send it to the drop thread to be dropped
+                let drop_msg = DropMessage::DataToDrop(data.clone());
+                if let Err(e) = self.dropper.send_msg(drop_msg) {
+                    error!("Error sending to drop thread {}", e);
                 }
 
-                // If this is true, we just marked this data
-                if data.last_marked.load(Ordering::SeqCst) == current_collection {
-                    // so retain it
-                    true
-                } else {
-                    // Otherwise we didn't mark it and it should be deallocated
+                // Note: It's okay to send all the data before we've removed it from the map
+                // The destructor manages the `destructed` flag so we can never access free'd data
 
-                    // eprintln!("deallocating {:?}", data_ptr);
-
-                    // Send it to the drop thread to be dropped
-                    let drop_msg = DropMessage::DataToDrop(data.clone());
-                    if let Err(e) = self.dropper.send_msg(drop_msg) {
-                        error!("Error sending to drop thread {}", e);
-                    }
-
-                    // Note: It's okay to send all the data before we've removed it from the map
-                    // The destructor manages the `destructed` flag so we can never access free'd data
-
-                    // Don't retain this data
-                    false
-                }
-            },
-            &data_guard,
-        );
+                // Don't retain this data
+                false
+            }
+        });
 
         self.trigger
             .set_data_count_after_collection(self.tracked_data_count());

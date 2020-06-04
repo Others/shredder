@@ -1,13 +1,23 @@
 use std::alloc::{alloc, dealloc, Layout};
-use std::mem::ManuallyDrop;
+use std::mem::{self, ManuallyDrop};
 use std::panic::UnwindSafe;
 use std::ptr;
 
 use crate::collector::InternalGcRef;
-use crate::{Scan, Scanner};
+use crate::{Finalize, Scan, Scanner};
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-pub struct GcAllocation(*const dyn Scan);
+pub struct GcAllocation {
+    scan_ptr: *const dyn Scan,
+    deallocation_action: DeallocationAction,
+}
+
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+pub enum DeallocationAction {
+    DoNothing,
+    RunDrop,
+    RunFinalizer { finalize_ptr: *const dyn Finalize },
+}
 
 // We need this for the drop thread. By that point we have exclusive access to the data
 // It also, by contract of Scan, cannot have a Drop method that is unsafe in any thead
@@ -18,7 +28,45 @@ impl UnwindSafe for GcAllocation {}
 unsafe impl Sync for GcAllocation {}
 
 impl GcAllocation {
-    pub fn allocate<T: Scan + 'static>(v: T) -> (Self, *const T) {
+    pub fn allocate_with_drop<T: Scan + 'static>(v: T) -> (Self, *const T) {
+        let (scan_ptr, raw_ptr) = Self::raw_allocate(v);
+        (
+            Self {
+                scan_ptr,
+                deallocation_action: DeallocationAction::RunDrop,
+            },
+            raw_ptr,
+        )
+    }
+
+    pub fn allocate_no_drop<T: Scan>(v: T) -> (Self, *const T) {
+        let (scan_ptr, raw_ptr) = Self::raw_allocate(v);
+        (
+            Self {
+                scan_ptr,
+                deallocation_action: DeallocationAction::DoNothing,
+            },
+            raw_ptr,
+        )
+    }
+
+    #[allow(clippy::transmute_ptr_to_ptr)]
+    pub fn allocate_with_finalization<T: Scan + Finalize>(v: T) -> (Self, *const T) {
+        let (scan_ptr, raw_ptr) = Self::raw_allocate(v);
+
+        let finalize_ptr = unsafe { mem::transmute(raw_ptr as *const dyn Finalize) };
+
+        (
+            Self {
+                scan_ptr,
+                deallocation_action: DeallocationAction::RunFinalizer { finalize_ptr },
+            },
+            raw_ptr,
+        )
+    }
+
+    #[allow(clippy::transmute_ptr_to_ptr)]
+    fn raw_allocate<'a, T: Scan + 'a>(v: T) -> (*const dyn Scan, *const T) {
         // This is a straightforward use of alloc/write -- it should be undef free
         let data_ptr = unsafe {
             let heap_space = alloc(Layout::new::<T>()) as *mut T;
@@ -29,24 +77,48 @@ impl GcAllocation {
             heap_space as *const T
         };
 
-        let fat_ptr: *const dyn Scan = data_ptr;
+        let fat_ptr: *const (dyn Scan + 'a) = data_ptr;
+        // The contract of `Scan` ensures the `scan` method can be called after lifetimes end
+        let fat_ptr: *const dyn Scan = unsafe { mem::transmute(fat_ptr) };
 
-        (Self(fat_ptr), data_ptr)
+        (fat_ptr, data_ptr)
     }
 
     // This is unsafe, since we must externally guarantee that no-one still holds a pointer to the data
     // (Luckily this is the point of the garbage collector!)
     pub unsafe fn deallocate(self) {
-        let scan_ptr: *const dyn Scan = self.0;
+        let scan_ptr: *const dyn Scan = self.scan_ptr;
 
-        // This calls the destructor of the Scan data
-        {
-            // Safe type shift: the contract of this method is that the scan_ptr doesn't alias
-            // + ManuallyDrop is repr(transparent)
-            let droppable_ptr: *mut ManuallyDrop<dyn Scan> =
-                scan_ptr as *mut ManuallyDrop<dyn Scan>;
-            let droppable_ref = &mut *droppable_ptr;
-            ManuallyDrop::drop(droppable_ref);
+        match self.deallocation_action {
+            DeallocationAction::DoNothing => {
+                // The name here is a bit of a lie, because we still need to invalidate handles
+                let mut scanner = Scanner::new(|h| {
+                    h.invalidate();
+                });
+                (&*scan_ptr).scan(&mut scanner);
+            }
+            DeallocationAction::RunDrop => {
+                // Safe type shift: the contract of this method is that the scan_ptr doesn't alias
+                // + ManuallyDrop is repr(transparent)
+                let droppable_ptr = scan_ptr as *mut ManuallyDrop<dyn Scan>;
+                let droppable_ref = &mut *droppable_ptr;
+                ManuallyDrop::drop(droppable_ref);
+            }
+            DeallocationAction::RunFinalizer { finalize_ptr } => {
+                // First of all invalidate handles, just in case of a bad `Finalize` implementation
+                // (If it doesn't delegate correctly, `Gc`s could be left dangling)
+                {
+                    let mut scanner = Scanner::new(|h| {
+                        h.invalidate();
+                    });
+                    (&*scan_ptr).scan(&mut scanner);
+                }
+
+                // We know this method can only be called if `scan_ptr` doesn't alias
+                // And we know `finalize_ptr` ~= `scan_ptr`
+                // So we can run `finalize` here, right before deallocation
+                (&mut *(finalize_ptr as *mut dyn Finalize)).finalize();
+            }
         }
 
         let dealloc_layout = Layout::for_value(&*scan_ptr);
@@ -57,13 +129,16 @@ impl GcAllocation {
     pub fn scan<F: FnMut(InternalGcRef)>(&self, callback: F) {
         unsafe {
             let mut scanner = Scanner::new(callback);
-            let to_scan = &*self.0;
+            let to_scan = &*self.scan_ptr;
             to_scan.scan(&mut scanner);
         }
     }
 
     #[cfg(test)]
     pub(crate) unsafe fn raw(v: *const dyn Scan) -> GcAllocation {
-        GcAllocation(v)
+        GcAllocation {
+            scan_ptr: v,
+            deallocation_action: DeallocationAction::DoNothing,
+        }
     }
 }
