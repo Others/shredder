@@ -103,4 +103,5 @@ workflows:
     - rust/format
     - rust/clippy
     - rust/test
+    - rust/coverage
   version: 2
