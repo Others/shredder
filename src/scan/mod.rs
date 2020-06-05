@@ -123,7 +123,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// This function is used internally to fail the `Scan` derive if a field is not `GcSafe`
-    /// It's a little bit of a cludge, but that's okay for now
+    /// It's a little bit of a kludge, but that's okay for now
     #[doc(hidden)]
     pub fn check_gc_safe<T: GcSafe>(&self, _: &T) {}
 

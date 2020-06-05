@@ -1,7 +1,7 @@
 //! shredder
 //! ========
 //! `shredder` is a library providing a garbage collected smart pointer: `Gc`.
-//! This is useful for times where you want shared access to some data, but the structure
+//! This is useful for times when you want shared access to some data, but the structure
 //! of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
 //!
 //! `shredder` has the following features:

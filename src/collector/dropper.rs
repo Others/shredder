@@ -18,12 +18,12 @@ pub(crate) enum DropMessage {
 
 impl BackgroundDropper {
     pub fn new() -> BackgroundDropper {
-        let (sender, reciever) = crossbeam::unbounded();
+        let (sender, receiver) = crossbeam::unbounded();
 
         // The drop thread deals with doing all the Drops this collector needs to do
         spawn(move || {
             // An Err value means the stream will never recover
-            while let Ok(drop_msg) = reciever.recv() {
+            while let Ok(drop_msg) = receiver.recv() {
                 match drop_msg {
                     DropMessage::DataToDrop(data) => {
                         // Mark this data as in the process of being deallocated and unsafe to access

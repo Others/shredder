@@ -14,7 +14,7 @@ edition = "2018"
 
 [dependencies]
 crossbeam = "0.7.3"
-dashmap = "3.11"
+dashmap = { version = "3.11", features = ["raw-api"] }
 dynqueue = "0.1.2"
 log = "0.4.8"
 once_cell = "1.4"

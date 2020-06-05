@@ -283,14 +283,14 @@ impl Collector {
     }
 
     pub fn synchronize_destructors(&self) {
-        let (sender, reciever) = crossbeam::bounded(1);
+        let (sender, receiver) = crossbeam::bounded(1);
         let drop_msg = DropMessage::SyncUp(sender);
         {
             self.dropper
                 .send_msg(drop_msg)
                 .expect("drop thread should be infallible!");
         }
-        reciever.recv().expect("drop thread should be infallible!");
+        receiver.recv().expect("drop thread should be infallible!");
     }
 
     pub fn check_then_collect(&self) -> bool {
@@ -389,10 +389,10 @@ impl Collector {
             // Any handles inside this could not of been seen in step 1, so they'll be rooted anyway
             if data.last_marked.load(Ordering::SeqCst) != 0 {
                 // Essential note! All non-new non-warranted data is automatically marked
-                // Thus we will never accidently scan non-warranted data here
+                // Thus we will never accidentally scan non-warranted data here
                 let previous_mark = data.last_marked.swap(current_collection, Ordering::SeqCst);
 
-                // Since we've done an automic swap, we know we've already scanned this iff it was marked
+                // Since we've done an atomic swap, we know we've already scanned this iff it was marked
                 // (excluding data marked because we couldn't get its warrant, who's handles would be seen as roots)
                 // This stops us for scanning data more than once and, crucially, concurrently scanning the same data
                 if previous_mark != current_collection {
@@ -414,10 +414,8 @@ impl Collector {
         // We're done scanning things, and have established what is marked. Release the warrants
         drop(warrants);
 
-        // FIXME: Is par_retain  a thing that could exist?
-        // Note: we cannot just do a parallel iteration with a remove inside the loop
-        // Why? Deadlocks in dashmap :D
-        self.tracked_data.data.retain(|data, _| {
+        // Now cleanup by removing all the data that is done for
+        par_retain(&self.tracked_data.data, |data, _| {
             // Mark the new data as in use for now
             if data.last_marked.load(Ordering::SeqCst) == 0 {
                 data.last_marked.store(current_collection, Ordering::SeqCst);
@@ -486,4 +484,17 @@ pub(crate) fn get_mock_handle() -> InternalGcRef {
         lockout,
         last_non_rooted: AtomicU64::new(0),
     }))
+}
+
+// Helper function! Lives here because it has nowhere else to go ;-;
+fn par_retain<K, V, F: Fn(&K, &V) -> bool>(map: &DashMap<K, V>, retain_fn: F)
+where
+    K: Eq + Hash + Send + Sync,
+    V: Send + Sync,
+    F: Send + Sync,
+{
+    map.shards()
+        .iter()
+        .par_bridge()
+        .for_each(|s| s.write().retain(|k, v| retain_fn(k, v.get())));
 }

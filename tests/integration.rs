@@ -127,12 +127,12 @@ fn scan_skip_problem() {
         let hider = Gc::new(sync::Mutex::new(Connection::default()));
         eprintln!("hider {:?}", hider);
         {
-            let hiden_clone_1 = hidden.clone();
-            eprintln!("hidden clone 1 {:?}", hiden_clone_1);
-            root_con.lock().unwrap().connect = Some(hiden_clone_1);
-            let hiden_clone_2 = hidden.clone();
-            eprintln!("hidden clone 2 {:?}", hiden_clone_2);
-            hider.lock().unwrap().connect = Some(hiden_clone_2);
+            let hidden_clone_1 = hidden.clone();
+            eprintln!("hidden clone 1 {:?}", hidden_clone_1);
+            root_con.lock().unwrap().connect = Some(hidden_clone_1);
+            let hidden_clone_2 = hidden.clone();
+            eprintln!("hidden clone 2 {:?}", hidden_clone_2);
+            hider.lock().unwrap().connect = Some(hidden_clone_2);
         }
         drop(hidden);
         drop(hider);
