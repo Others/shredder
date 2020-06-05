@@ -220,6 +220,17 @@ impl<T: Scan + 'static> Gc<RefCell<T>> {
     }
 }
 
+#[derive(Debug)]
+pub struct GcPoisonError<T> {
+    guard: T,
+}
+
+impl<T> GcPoisonError<T> {
+    pub fn into_inner(self) -> T {
+        self.guard
+    }
+}
+
 // This is special casing for Gc<Mutex<T>>
 rental! {
     mod gc_mutex_internals {
@@ -254,9 +265,13 @@ impl<T: Scan + 'static> DerefMut for GcMutexGuard<'_, T> {
     }
 }
 
-// TODO: Give users a way to recover from poison without manual intervention
-#[derive(Debug)]
-pub struct GcMutexPoisonError;
+impl<T: Scan + 'static + Debug> Debug for GcMutexGuard<'_, T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GcMutexGuard")
+            .field("guarding", self.deref())
+            .finish()
+    }
+}
 
 impl<T: Scan + 'static> Gc<sync::Mutex<T>> {
     /// Call the underlying lock method on the inner `Mutex`
@@ -264,19 +279,30 @@ impl<T: Scan + 'static> Gc<sync::Mutex<T>> {
     /// This is just a nice method so you don't have to `get` manually
     ///
     /// # Errors
-    /// Returns a `GcMutexPoisonError` if the underlying `.lock` method returns an error
-    /// Note that this error, unlike the underlying one, does not give a way to recover the guard
-    pub fn lock(&self) -> Result<GcMutexGuard<'_, T>, GcMutexPoisonError> {
+    /// Returns a `GcPoisonError` if the underlying `.lock` method returns an error.
+    /// You may use `into_inner` in order to recover the guard from that error.
+    pub fn lock(&self) -> Result<GcMutexGuard<'_, T>, GcPoisonError<GcMutexGuard<'_, T>>> {
         let g = self.get();
-        let internal_guard = gc_mutex_internals::GcMutexGuardInt::try_new(g, |g| match g.lock() {
-            Ok(v) => Ok(v),
-            Err(_) => Err(GcMutexPoisonError),
-        })
-        .map_err(|e| e.0)?;
+        let mut was_poisoned = false;
+        let internal_guard = gc_mutex_internals::GcMutexGuardInt::new(g, |g| match g.lock() {
+            Ok(v) => v,
+            Err(e) => {
+                was_poisoned = true;
+                e.into_inner()
+            }
+        });
 
-        Ok(GcMutexGuard { internal_guard })
+        let guard = GcMutexGuard { internal_guard };
+
+        if was_poisoned {
+            Err(GcPoisonError { guard })
+        } else {
+            Ok(guard)
+        }
     }
 }
+
+// TODO: Implement GRwLock along the same lines
 
 // Lots of traits it's good for a smart ptr to implement:
 impl<T: Scan> Debug for Gc<T> {
