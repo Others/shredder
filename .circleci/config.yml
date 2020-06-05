@@ -95,7 +95,7 @@ jobs:
       - checkout
       - run:
           name: Coverage with docker
-          command: docker run -e CT=${COVERALLS_TOKEN} --security-opt seccomp=unconfined -v "${PWD}:/volume" xd009642/tarpaulin sh -c "echo $CT && cargo tarpaulin --ciserver circle-ci --coveralls $CT --timeout 600"
+          command: docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" xd009642/tarpaulin cargo tarpaulin -v --ciserver circle-ci --coveralls ${COVERALLS_TOKEN} --timeout 600
 
 workflows:
   build:
