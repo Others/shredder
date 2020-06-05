@@ -1,16 +1,20 @@
+mod mutex;
+mod refcell;
+
 use std::borrow::Borrow;
-use std::cell::{BorrowError, BorrowMutError, RefCell};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::{Deref, DerefMut};
-use std::sync;
+use std::ops::Deref;
 
 use stable_deref_trait::StableDeref;
 
 use crate::collector::{InternalGcRef, COLLECTOR};
 use crate::lockout::Warrant;
 use crate::{Finalize, Scan};
+
+pub use mutex::{GcMutexGuard, GcPoisonError, GcTryLockError};
+pub use refcell::{GcRef, GcRefMut};
 
 /// A smart-pointer for data tracked by `shredder` garbage collector
 pub struct Gc<T: Scan> {
@@ -112,193 +116,6 @@ unsafe impl<T: Scan> Send for Gc<T> where T: Sync + Send {}
 impl<T: Scan> Drop for Gc<T> {
     fn drop(&mut self) {
         self.backing_handle.invalidate();
-    }
-}
-
-// This is special casing for Gc<RefCell<T>>
-rental! {
-    mod gc_refcell_internals {
-        use crate::{Scan, GcGuard};
-        use std::cell::{Ref, RefCell, RefMut};
-
-        /// Self referential wrapper around `Ref` for ergonomics
-        #[rental(deref_suffix)]
-        pub struct GcRefInt<'a, T: Scan + 'static> {
-            gc_guard: GcGuard<'a, RefCell<T>>,
-            cell_ref: Ref<'gc_guard, T>
-        }
-
-        /// Self referential wrapper around `RefMut` for ergonomics
-        #[rental(deref_mut_suffix)]
-        pub struct GcRefMutInt<'a, T: Scan + 'static> {
-            gc_guard: GcGuard<'a, RefCell<T>>,
-            cell_ref: RefMut<'gc_guard, T>
-        }
-    }
-}
-
-/// This is like a `Ref`, but taken directly from a `Gc`
-pub struct GcRef<'a, T: Scan + 'static> {
-    internal_ref: gc_refcell_internals::GcRefInt<'a, T>,
-}
-
-impl<'a, T: Scan + 'static> Deref for GcRef<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.internal_ref.deref()
-    }
-}
-
-/// This is like a `RefMut`, but taken directly from a `Gc`
-pub struct GcRefMut<'a, T: Scan + 'static> {
-    internal_ref: gc_refcell_internals::GcRefMutInt<'a, T>,
-}
-
-impl<'a, T: Scan + 'static> Deref for GcRefMut<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.internal_ref.deref()
-    }
-}
-
-impl<'a, T: Scan + 'static> DerefMut for GcRefMut<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.internal_ref.deref_mut()
-    }
-}
-
-impl<T: Scan + 'static> Gc<RefCell<T>> {
-    /// Call the underlying `borrow` method on the `RefCell`.
-    ///
-    /// This is just a nice method so you don't have to call `get` manually.
-    #[must_use]
-    pub fn borrow(&self) -> GcRef<'_, T> {
-        let g = self.get();
-        let internal_ref = gc_refcell_internals::GcRefInt::new(g, RefCell::borrow);
-
-        GcRef { internal_ref }
-    }
-
-    /// Call the underlying `try_borrow` method on the `RefCell`.
-    ///
-    /// This is just a nice method so you don't have to call `get` manually.
-    ///
-    /// # Errors
-    /// Propagates a `BorrowError` if the underlying `RefCell` is already borrowed mutably
-    pub fn try_borrow(&self) -> Result<GcRef<'_, T>, BorrowError> {
-        let g = self.get();
-        let internal_ref =
-            gc_refcell_internals::GcRefInt::try_new(g, RefCell::try_borrow).map_err(|e| e.0)?;
-
-        Ok(GcRef { internal_ref })
-    }
-
-    /// Call the underlying `borrow_mut` method on the `RefCell`.
-    ///
-    /// This is just a nice method so you don't have to call `get` manually.
-    #[must_use]
-    pub fn borrow_mut(&self) -> GcRefMut<'_, T> {
-        let g = self.get();
-        let internal_ref = gc_refcell_internals::GcRefMutInt::new(g, RefCell::borrow_mut);
-
-        GcRefMut { internal_ref }
-    }
-
-    /// Call the underlying `try_borrow_mut` method on the `RefCell`.
-    ///
-    /// This is just a nice method so you don't have to call `get` manually.
-    /// # Errors
-    /// Propagates a `BorrowError` if the underlying `RefCell` is already borrowed
-    pub fn try_borrow_mut(&self) -> Result<GcRefMut<'_, T>, BorrowMutError> {
-        let g = self.get();
-        let internal_ref = gc_refcell_internals::GcRefMutInt::try_new(g, RefCell::try_borrow_mut)
-            .map_err(|e| e.0)?;
-
-        Ok(GcRefMut { internal_ref })
-    }
-}
-
-#[derive(Debug)]
-pub struct GcPoisonError<T> {
-    guard: T,
-}
-
-impl<T> GcPoisonError<T> {
-    pub fn into_inner(self) -> T {
-        self.guard
-    }
-}
-
-// This is special casing for Gc<Mutex<T>>
-rental! {
-    mod gc_mutex_internals {
-        use crate::{Scan, GcGuard};
-        use std::sync::{Mutex, MutexGuard};
-
-        /// Self referential wrapper around `MutexGuard` for ergonomics
-        #[rental(deref_mut_suffix)]
-        pub struct GcMutexGuardInt<'a, T: Scan + 'static> {
-            gc_guard: GcGuard<'a, Mutex<T>>,
-            cell_ref: MutexGuard<'gc_guard, T>
-        }
-    }
-}
-
-/// This is like a `MutexGuard`, but taken directly from a `Gc`
-pub struct GcMutexGuard<'a, T: Scan + 'static> {
-    internal_guard: gc_mutex_internals::GcMutexGuardInt<'a, T>,
-}
-
-impl<T: Scan + 'static> Deref for GcMutexGuard<'_, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.internal_guard.deref()
-    }
-}
-
-impl<T: Scan + 'static> DerefMut for GcMutexGuard<'_, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.internal_guard.deref_mut()
-    }
-}
-
-impl<T: Scan + 'static + Debug> Debug for GcMutexGuard<'_, T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GcMutexGuard")
-            .field("guarding", self.deref())
-            .finish()
-    }
-}
-
-impl<T: Scan + 'static> Gc<sync::Mutex<T>> {
-    /// Call the underlying lock method on the inner `Mutex`
-    ///
-    /// This is just a nice method so you don't have to `get` manually
-    ///
-    /// # Errors
-    /// Returns a `GcPoisonError` if the underlying `.lock` method returns an error.
-    /// You may use `into_inner` in order to recover the guard from that error.
-    pub fn lock(&self) -> Result<GcMutexGuard<'_, T>, GcPoisonError<GcMutexGuard<'_, T>>> {
-        let g = self.get();
-        let mut was_poisoned = false;
-        let internal_guard = gc_mutex_internals::GcMutexGuardInt::new(g, |g| match g.lock() {
-            Ok(v) => v,
-            Err(e) => {
-                was_poisoned = true;
-                e.into_inner()
-            }
-        });
-
-        let guard = GcMutexGuard { internal_guard };
-
-        if was_poisoned {
-            Err(GcPoisonError { guard })
-        } else {
-            Ok(guard)
-        }
     }
 }
 
