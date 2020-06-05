@@ -1,7 +1,8 @@
 use parking_lot::Mutex;
 
 // TODO(issue): https://github.com/Others/shredder/issues/8
-const DEFAULT_TRIGGER_PERCENT: f32 = 0.75;
+const DEFAULT_ALLOCATION_TRIGGER_PERCENT: f32 = 0.75;
+const DEFAULT_HANDLE_DEFICIT_TRIGGER_PERCENT: f32 = 0.9;
 const MIN_ALLOCATIONS_FOR_COLLECTION: f32 = 512.0 * 1.3;
 
 pub struct Trigger {
@@ -10,21 +11,30 @@ pub struct Trigger {
 
 struct InternalTriggerData {
     // Percent more allocations needed to trigger garbage collection
-    gc_trigger_percent: f32,
+    allocations_trigger_percent: f32,
+    // Percent less handles than data needed to trigger garbage collection
+    handle_deficit_trigger_percent: f32,
     data_count_at_last_collection: usize,
 }
 
 impl Trigger {
     pub fn set_trigger_percent(&self, p: f32) {
-        self.data.lock().gc_trigger_percent = p;
+        self.data.lock().allocations_trigger_percent = p;
     }
 
-    pub fn should_collect(&self, current_data_count: usize) -> bool {
+    pub fn should_collect(&self, current_data_count: usize, current_handle_count: usize) -> bool {
         let internal_data = self.data.lock();
 
         // If we haven't reached the min allocation threshold, then hold off
         if (current_data_count as f32) < MIN_ALLOCATIONS_FOR_COLLECTION {
             return false;
+        }
+
+        // If we have an extremely deficient amount of handles, we should collect
+        let handle_threshold =
+            internal_data.handle_deficit_trigger_percent * current_data_count as f32;
+        if (current_handle_count as f32) <= handle_threshold {
+            return true;
         }
 
         let amount_of_new_data = current_data_count - internal_data.data_count_at_last_collection;
@@ -37,7 +47,7 @@ impl Trigger {
         }
 
         // Otherwise base our decision off the configured gc_trigger_percent
-        percent_more_data >= internal_data.gc_trigger_percent
+        percent_more_data >= internal_data.allocations_trigger_percent
     }
 
     pub fn set_data_count_after_collection(&self, data_count: usize) {
@@ -50,7 +60,8 @@ impl Default for Trigger {
     fn default() -> Self {
         Trigger {
             data: Mutex::new(InternalTriggerData {
-                gc_trigger_percent: DEFAULT_TRIGGER_PERCENT,
+                allocations_trigger_percent: DEFAULT_ALLOCATION_TRIGGER_PERCENT,
+                handle_deficit_trigger_percent: DEFAULT_HANDLE_DEFICIT_TRIGGER_PERCENT,
                 data_count_at_last_collection: 0,
             }),
         }

@@ -297,7 +297,11 @@ impl Collector {
         let gc_guard = self.gc_lock.lock();
 
         let current_data_count = self.tracked_data.data.len();
-        if self.trigger.should_collect(current_data_count) {
+        let current_handle_count = self.tracked_data.handles.len();
+        if self
+            .trigger
+            .should_collect(current_data_count, current_handle_count)
+        {
             self.do_collect(gc_guard);
             true
         } else {

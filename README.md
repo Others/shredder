@@ -1,5 +1,10 @@
  shredder
  ========
+[![CircleCI](https://circleci.com/gh/Others/shredder.svg?style=svg)](https://app.circleci.com/pipelines/github/Others/shredder)
+[![Coverage Status](https://coveralls.io/repos/github/Others/shredder/badge.svg?branch=master)](https://coveralls.io/github/Others/shredder?branch=master)
+[![Dependencies](https://img.shields.io/librariesio/github/Others/shredder)](https://libraries.io/github/Others/shredder)
+[![Version](https://img.shields.io/crates/v/shredder)](https://crates.io/crates/shredder)
+
 `shredder` is a library providing a garbage collected smart pointer: `Gc`.
 This is useful for times where you want shared access to some data, but the structure
 of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
@@ -53,7 +58,7 @@ fn main() {
 
         // Usually would need `get` for `Gc` data, but `RefCell` is a special case
         a.borrow_mut().directed_edges.push(b.clone());
-        b.borrow_mut().directed_edges.push(a.clone());
+        b.borrow_mut().directed_edges.push(a);
         // We now have cyclical data!
     });
     // Everything was cleaned up!
