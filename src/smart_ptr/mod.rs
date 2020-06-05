@@ -1,22 +1,20 @@
-mod mutex;
-mod refcell;
-
 use std::borrow::Borrow;
+use std::cell::{BorrowError, BorrowMutError, RefCell};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
+use std::sync;
 
 use stable_deref_trait::StableDeref;
 
 use crate::collector::{InternalGcRef, COLLECTOR};
 use crate::lockout::Warrant;
-use crate::{Finalize, Scan};
-
-pub use mutex::{
-    GcMutexGuard, GcPoisonError, GcRwLockReadGuard, GcRwLockWriteGuard, GcTryLockError,
+use crate::wrappers::{
+    GcMutexGuard, GcPoisonError, GcRef, GcRefMut, GcRwLockReadGuard, GcRwLockWriteGuard,
+    GcTryLockError,
 };
-pub use refcell::{GcRef, GcRefMut};
+use crate::{Finalize, Scan};
 
 /// A smart-pointer for data tracked by `shredder` garbage collector
 pub struct Gc<T: Scan> {
@@ -288,5 +286,128 @@ impl<'a, T: Scan + Debug> Debug for GcGuard<'a, T> {
             .field("v", self.deref())
             .field("warrant", &"<SNIP>")
             .finish()
+    }
+}
+
+// Special casing goes here, mostly so rustdoc documents it in the right order
+impl<T: Scan + 'static> Gc<RefCell<T>> {
+    /// Call the underlying `borrow` method on the `RefCell`.
+    ///
+    /// This is just a nice method so you don't have to call `get` manually.
+    #[must_use]
+    pub fn borrow(&self) -> GcRef<'_, T> {
+        let g = self.get();
+        GcRef::borrow(g)
+    }
+
+    /// Call the underlying `try_borrow` method on the `RefCell`.
+    ///
+    /// This is just a nice method so you don't have to call `get` manually.
+    ///
+    /// # Errors
+    /// Propagates a `BorrowError` if the underlying `RefCell` is already borrowed mutably
+    pub fn try_borrow(&self) -> Result<GcRef<'_, T>, BorrowError> {
+        let g = self.get();
+        GcRef::try_borrow(g)
+    }
+
+    /// Call the underlying `borrow_mut` method on the `RefCell`.
+    ///
+    /// This is just a nice method so you don't have to call `get` manually.
+    #[must_use]
+    pub fn borrow_mut(&self) -> GcRefMut<'_, T> {
+        let g = self.get();
+        GcRefMut::borrow_mut(g)
+    }
+
+    /// Call the underlying `try_borrow_mut` method on the `RefCell`.
+    ///
+    /// This is just a nice method so you don't have to call `get` manually.
+    /// # Errors
+    /// Propagates a `BorrowError` if the underlying `RefCell` is already borrowed
+    pub fn try_borrow_mut(&self) -> Result<GcRefMut<'_, T>, BorrowMutError> {
+        let g = self.get();
+        GcRefMut::try_borrow_mut(g)
+    }
+}
+
+impl<T: Scan + 'static> Gc<sync::Mutex<T>> {
+    /// Call the underlying `lock` method on the inner `Mutex`
+    ///
+    /// This is just a nice method so you don't have to `get` manually
+    ///
+    /// # Errors
+    /// Returns a `GcPoisonError` if the underlying `.lock` method returns a poison error.
+    /// You may use `into_inner` in order to recover the guard from that error.
+    pub fn lock(&self) -> Result<GcMutexGuard<'_, T>, GcPoisonError<GcMutexGuard<'_, T>>> {
+        let g = self.get();
+        GcMutexGuard::lock(g)
+    }
+
+    /// Call the underlying `try_lock` method on the inner `Mutex`
+    ///
+    /// This is just a nice method so you don't have to `get` manually
+    ///
+    /// # Errors
+    /// Returns a `GcTryLockError` if the underlying `.try_lock` method returns an error
+    pub fn try_lock(&self) -> Result<GcMutexGuard<'_, T>, GcTryLockError<GcMutexGuard<'_, T>>> {
+        let g = self.get();
+        GcMutexGuard::try_lock(g)
+    }
+}
+
+impl<T: Scan + 'static> Gc<sync::RwLock<T>> {
+    /// Call the underlying `read` method on the inner `RwLock`
+    ///
+    /// This is just a nice method so you don't have to `get` manually
+    ///
+    /// # Errors
+    /// Returns a `GcPoisonError` if the underlying `read` method returns a poison error.
+    /// You may use `into_inner` in order to recover the guard from that error.
+    pub fn read(
+        &self,
+    ) -> Result<GcRwLockReadGuard<'_, T>, GcPoisonError<GcRwLockReadGuard<'_, T>>> {
+        let g = self.get();
+        GcRwLockReadGuard::read(g)
+    }
+
+    /// Call the underlying `write` method on the inner `RwLock`
+    ///
+    /// This is just a nice method so you don't have to `get` manually
+    ///
+    /// # Errors
+    /// Returns a `GcPoisonError` if the underlying `write` method returns a poison error.
+    /// You may use `into_inner` in order to recover the guard from that error.
+    pub fn write(
+        &self,
+    ) -> Result<GcRwLockWriteGuard<'_, T>, GcPoisonError<GcRwLockWriteGuard<'_, T>>> {
+        let g = self.get();
+        GcRwLockWriteGuard::write(g)
+    }
+
+    /// Call the underlying `try_read` method on the inner `RwLock`
+    ///
+    /// This is just a nice method so you don't have to `get` manually
+    ///
+    /// # Errors
+    /// Returns a `GcTryLockError` if the underlying `try_read` method returns an error
+    pub fn try_read(
+        &self,
+    ) -> Result<GcRwLockReadGuard<'_, T>, GcTryLockError<GcRwLockReadGuard<'_, T>>> {
+        let g = self.get();
+        GcRwLockReadGuard::try_read(g)
+    }
+
+    /// Call the underlying `try_write` method on the inner `RwLock`
+    ///
+    /// This is just a nice method so you don't have to `get` manually
+    ///
+    /// # Errors
+    /// Returns a `GcTryLockError` if the underlying `try_write` method returns an error
+    pub fn try_write(
+        &self,
+    ) -> Result<GcRwLockWriteGuard<'_, T>, GcTryLockError<GcRwLockWriteGuard<'_, T>>> {
+        let g = self.get();
+        GcRwLockWriteGuard::try_write(g)
     }
 }

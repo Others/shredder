@@ -54,18 +54,17 @@ mod finalize;
 mod lockout;
 mod scan;
 mod smart_ptr;
+/// Helpful wrappers used for convenience methods
+pub mod wrappers;
 
 use std::cell::RefCell;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 use collector::COLLECTOR;
 
 pub use finalize::Finalize;
 pub use scan::{GcSafe, GcSafeWrapper, RMut, Scan, Scanner, R};
-pub use smart_ptr::{
-    Gc, GcGuard, GcMutexGuard, GcPoisonError, GcRef, GcRefMut, GcRwLockReadGuard,
-    GcRwLockWriteGuard, GcTryLockError,
-};
+pub use smart_ptr::{Gc, GcGuard};
 
 // Re-export the Scan derive
 pub use shredder_derive::Scan;
@@ -79,6 +78,11 @@ pub type GRefCell<T> = Gc<RefCell<T>>;
 /// Note that `Gc<Mutex<T>>` has additional specialized methods for working with `Mutex`s inside
 /// `Gc`s.
 pub type GMutex<T> = Gc<Mutex<T>>;
+
+/// A convenient alias for `Gc<RwLock<T>>`.
+/// Note that `Gc<Mutex<T>>` has additional specialized methods for working with `Mutex`s inside
+/// `Gc`s.
+pub type GRwLock<T> = Gc<RwLock<T>>;
 
 /// Returns how many underlying allocations are currently allocated.
 ///
@@ -134,7 +138,9 @@ pub fn set_gc_trigger_percent(percent: f32) {
 }
 
 /// A function for manually running a collection, ignoring the heuristic that governs normal
-/// garbage collector operations. This can be an extremely slow operation, since the algorithm is
+/// garbage collector operations.
+///
+/// This can be an extremely slow operation, since the algorithm is
 /// designed to be run in the background, while this method runs it on the thread that calls the
 /// method. Additionally, you may end up blocking waiting to collect, since `shredder` doesn't allow
 /// two collections at once (and if this happens, you'll effectively get two collections in a row).

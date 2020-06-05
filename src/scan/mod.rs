@@ -90,8 +90,9 @@ pub unsafe trait Scan: GcSafe {
     fn scan(&self, scanner: &mut Scanner<'_>);
 }
 
-/// `GcSafe` is a marker trait that indicates that the data can be managed in the background by the
-/// garbage collector. Data that is `GcSafe` satisfies the following requirements:
+/// A marker trait that marks that data can be managed in the background by the garbage collector.
+///
+/// Data that is `GcSafe` satisfies the following requirements:
 /// 1) It's okay for any thread to call `scan`, as long as it has exclusive access to the data
 /// 2) If this data is `'static`, any thread can drop the data safely
 /// Requirement (1) can be relaxed if you can ensure that the type does not implement `Scan`
