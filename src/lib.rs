@@ -34,6 +34,7 @@
 // But I don't care about these ones
 #![allow(
     clippy::cast_precision_loss,     // There is no way to avoid this precision loss
+    clippy::explicit_deref_methods,  // Sometimes calling `deref` directly is clearer
     clippy::module_name_repetitions, // Sometimes clear naming calls for repetition
     clippy::multiple_crate_versions  // There is no way to easily fix this without modifying our dependencies
 )]

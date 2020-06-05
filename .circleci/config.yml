@@ -89,6 +89,14 @@ jobs:
     - run:
         name: Run all tests
         command: cargo test --all
+  rust/coverage:
+    machine: true
+    steps:
+      - checkout
+      - run:
+          name: Coverage with docker
+          command: docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" xd009642/tarpaulin sh -c "cargo tarpaulin --coveralls {{COVERALLS_TOKEN}}"
+
 workflows:
   build:
     jobs:

@@ -6,13 +6,13 @@ use std::ptr;
 use crate::collector::InternalGcRef;
 use crate::{Finalize, Scan, Scanner};
 
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Copy, Clone, Debug, Hash)]
 pub struct GcAllocation {
     scan_ptr: *const dyn Scan,
     deallocation_action: DeallocationAction,
 }
 
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Copy, Clone, Debug, Hash)]
 pub enum DeallocationAction {
     DoNothing,
     RunDrop,

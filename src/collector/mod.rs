@@ -154,7 +154,7 @@ impl Collector {
         let async_collector_ref = Arc::downgrade(&res);
         spawn(move || {
             // An Err value means the stream will never recover
-            while let Ok(_) = async_gc_receiver.recv() {
+            while async_gc_receiver.recv().is_ok() {
                 if let Some(collector) = async_collector_ref.upgrade() {
                     collector.check_then_collect();
                 }
