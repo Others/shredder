@@ -30,7 +30,7 @@
     clippy::needless_borrow,
     clippy::pedantic,
     clippy::redundant_clone,
-    rust_2018_idioms,
+    rust_2018_idioms
 )]
 // But I don't care about these ones
 #![allow(

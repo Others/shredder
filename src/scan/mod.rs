@@ -87,7 +87,7 @@ pub use r::{RMut, R};
 /// ```
 pub unsafe trait Scan: GcSafe {
     /// `scan` should use the scanner to scan all of its directly owned data
-    fn scan(&self, scanner: &mut Scanner);
+    fn scan(&self, scanner: &mut Scanner<'_>);
 }
 
 /// `GcSafe` is a marker trait that indicates that the data can be managed in the background by the
@@ -137,7 +137,7 @@ impl<'a> Scanner<'a> {
 unsafe impl<T: Scan> Scan for Gc<T> {
     #[allow(clippy::inline_always)]
     #[inline(always)]
-    fn scan(&self, scanner: &mut Scanner) {
+    fn scan(&self, scanner: &mut Scanner<'_>) {
         scanner.add_internal_handle(self)
     }
 }

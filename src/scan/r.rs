@@ -9,13 +9,13 @@ use std::cmp::Ordering;
 // become invalid after their lifetime ends
 unsafe impl<T> Scan for &'static T {
     #[inline(always)]
-    fn scan(&self, _: &mut Scanner) {}
+    fn scan(&self, _: &mut Scanner<'_>) {}
 }
 unsafe impl<T> GcSafe for &'static T {}
 
 unsafe impl<T> Scan for &'static mut T {
     #[inline(always)]
-    fn scan(&self, _: &mut Scanner) {}
+    fn scan(&self, _: &mut Scanner<'_>) {}
 }
 unsafe impl<T> GcSafe for &'static mut T {}
 
@@ -45,11 +45,11 @@ unsafe impl<'a, T> GcSafe for RMut<'a, T> {}
 
 unsafe impl<'a, T> Scan for R<'a, T> {
     #[inline(always)]
-    fn scan(&self, _: &mut Scanner) {}
+    fn scan(&self, _: &mut Scanner<'_>) {}
 }
 unsafe impl<'a, T> Scan for RMut<'a, T> {
     #[inline(always)]
-    fn scan(&self, _: &mut Scanner) {}
+    fn scan(&self, _: &mut Scanner<'_>) {}
 }
 
 // Fixup the concurrency marker traits

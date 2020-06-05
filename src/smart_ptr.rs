@@ -78,7 +78,7 @@ impl<T: Scan> Gc<T> {
     /// data in a `Gc`. The API is very analogous to the `Mutex` API. It may block if the data is
     /// being scanned
     #[must_use]
-    pub fn get(&self) -> GcGuard<T> {
+    pub fn get(&self) -> GcGuard<'_, T> {
         let warrant = COLLECTOR.get_data_warrant(&self.backing_handle);
         GcGuard {
             gc_ptr: self,
@@ -174,7 +174,7 @@ impl<T: Scan + 'static> Gc<RefCell<T>> {
     ///
     /// This is just a nice method so you don't have to call `get` manually.
     #[must_use]
-    pub fn borrow(&self) -> GcRef<T> {
+    pub fn borrow(&self) -> GcRef<'_, T> {
         let g = self.get();
         let internal_ref = gc_refcell_internals::GcRefInt::new(g, RefCell::borrow);
 
@@ -187,7 +187,7 @@ impl<T: Scan + 'static> Gc<RefCell<T>> {
     ///
     /// # Errors
     /// Propagates a `BorrowError` if the underlying `RefCell` is already borrowed mutably
-    pub fn try_borrow(&self) -> Result<GcRef<T>, BorrowError> {
+    pub fn try_borrow(&self) -> Result<GcRef<'_, T>, BorrowError> {
         let g = self.get();
         let internal_ref =
             gc_refcell_internals::GcRefInt::try_new(g, RefCell::try_borrow).map_err(|e| e.0)?;
@@ -199,7 +199,7 @@ impl<T: Scan + 'static> Gc<RefCell<T>> {
     ///
     /// This is just a nice method so you don't have to call `get` manually.
     #[must_use]
-    pub fn borrow_mut(&self) -> GcRefMut<T> {
+    pub fn borrow_mut(&self) -> GcRefMut<'_, T> {
         let g = self.get();
         let internal_ref = gc_refcell_internals::GcRefMutInt::new(g, RefCell::borrow_mut);
 
@@ -211,7 +211,7 @@ impl<T: Scan + 'static> Gc<RefCell<T>> {
     /// This is just a nice method so you don't have to call `get` manually.
     /// # Errors
     /// Propagates a `BorrowError` if the underlying `RefCell` is already borrowed
-    pub fn try_borrow_mut(&self) -> Result<GcRefMut<T>, BorrowMutError> {
+    pub fn try_borrow_mut(&self) -> Result<GcRefMut<'_, T>, BorrowMutError> {
         let g = self.get();
         let internal_ref = gc_refcell_internals::GcRefMutInt::try_new(g, RefCell::try_borrow_mut)
             .map_err(|e| e.0)?;
@@ -266,7 +266,7 @@ impl<T: Scan + 'static> Gc<sync::Mutex<T>> {
     /// # Errors
     /// Returns a `GcMutexPoisonError` if the underlying `.lock` method returns an error
     /// Note that this error, unlike the underlying one, does not give a way to recover the guard
-    pub fn lock(&self) -> Result<GcMutexGuard<T>, GcMutexPoisonError> {
+    pub fn lock(&self) -> Result<GcMutexGuard<'_, T>, GcMutexPoisonError> {
         let g = self.get();
         let internal_guard = gc_mutex_internals::GcMutexGuardInt::try_new(g, |g| match g.lock() {
             Ok(v) => Ok(v),

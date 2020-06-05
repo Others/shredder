@@ -12,7 +12,7 @@ macro_rules! impl_empty_scan_for_send_type {
         unsafe impl GcSafe for $t where $t: Send {}
         unsafe impl Scan for $t {
             #[inline(always)]
-            fn scan(&self, _: &mut Scanner) {}
+            fn scan(&self, _: &mut Scanner<'_>) {}
         }
     };
 }
@@ -21,7 +21,7 @@ macro_rules! impl_empty_scan_for_send_type {
 // Safety: GcSafe is a structural property for normally Send collections
 unsafe impl<T: Scan> Scan for Vec<T> {
     #[inline]
-    fn scan(&self, scanner: &mut Scanner) {
+    fn scan(&self, scanner: &mut Scanner<'_>) {
         for e in self {
             scanner.scan(e)
         }
@@ -31,7 +31,7 @@ unsafe impl<T: GcSafe> GcSafe for Vec<T> {}
 
 unsafe impl<T: Scan, S: BuildHasher> Scan for HashSet<T, S> {
     #[inline]
-    fn scan(&self, scanner: &mut Scanner) {
+    fn scan(&self, scanner: &mut Scanner<'_>) {
         for e in self {
             scanner.scan(e)
         }
@@ -42,7 +42,7 @@ unsafe impl<T: GcSafe, S: BuildHasher> GcSafe for HashSet<T, S> {}
 
 unsafe impl<K: Scan, V: Scan, S: BuildHasher> Scan for HashMap<K, V, S> {
     #[inline]
-    fn scan(&self, scanner: &mut Scanner) {
+    fn scan(&self, scanner: &mut Scanner<'_>) {
         for (k, v) in self {
             scanner.scan(k);
             scanner.scan(v);
@@ -54,7 +54,7 @@ unsafe impl<K: GcSafe, V: GcSafe, S: BuildHasher> GcSafe for HashMap<K, V, S> {}
 
 unsafe impl<T: Scan> Scan for RefCell<T> {
     #[inline]
-    fn scan(&self, scanner: &mut Scanner) {
+    fn scan(&self, scanner: &mut Scanner<'_>) {
         // It's an error if this fails
         if let Ok(reference) = self.try_borrow() {
             let raw: &T = reference.deref();
@@ -68,7 +68,7 @@ unsafe impl<T: GcSafe> GcSafe for RefCell<T> {}
 
 unsafe impl<T: Scan> Scan for Option<T> {
     #[inline]
-    fn scan(&self, scanner: &mut Scanner) {
+    fn scan(&self, scanner: &mut Scanner<'_>) {
         if let Some(v) = self {
             scanner.scan(v);
         }
@@ -78,7 +78,7 @@ unsafe impl<T: GcSafe> GcSafe for Option<T> {}
 
 unsafe impl<T: Scan> Scan for Mutex<T> {
     #[inline]
-    fn scan(&self, scanner: &mut Scanner) {
+    fn scan(&self, scanner: &mut Scanner<'_>) {
         match self.try_lock() {
             Ok(data) => {
                 let raw: &T = data.deref();
@@ -97,7 +97,7 @@ unsafe impl<T: GcSafe> GcSafe for Mutex<T> {}
 
 unsafe impl<T: Scan> Scan for RwLock<T> {
     #[inline]
-    fn scan(&self, scanner: &mut Scanner) {
+    fn scan(&self, scanner: &mut Scanner<'_>) {
         match self.try_read() {
             Ok(data) => {
                 let raw: &T = data.deref();
@@ -157,7 +157,7 @@ mod test {
     }
     unsafe impl GcSafe for MockGc {}
     unsafe impl Scan for MockGc {
-        fn scan(&self, scanner: &mut Scanner) {
+        fn scan(&self, scanner: &mut Scanner<'_>) {
             (scanner.scan_callback)(self.handle.clone());
         }
     }

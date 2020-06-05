@@ -314,7 +314,7 @@ impl Collector {
     // TODO: Remove the vectors we allocate here with an intrusive linked list
     // TODO: Optimize memory overhead
     #[allow(clippy::shadow_unrelated)]
-    fn do_collect(&self, gc_guard: MutexGuard<()>) {
+    fn do_collect(&self, gc_guard: MutexGuard<'_, ()>) {
         // Be careful modifying this method. The tracked data and tracked handles can change underneath us
         // Currently the state is this, as far as I can tell:
         // - New handles are conservatively seen as roots if seen at all while we are touching handles
@@ -461,7 +461,7 @@ pub(crate) fn get_mock_handle() -> InternalGcRef {
 
     pub(crate) struct MockAllocation;
     unsafe impl Scan for MockAllocation {
-        fn scan(&self, _: &mut Scanner) {}
+        fn scan(&self, _: &mut Scanner<'_>) {}
     }
     unsafe impl GcSafe for MockAllocation {}
 
