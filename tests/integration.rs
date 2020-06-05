@@ -1,5 +1,3 @@
-extern crate shredder;
-
 use std::cell::RefCell;
 use std::mem::drop;
 use std::ops::Deref;
