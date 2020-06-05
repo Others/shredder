@@ -1,0 +1,98 @@
+version: 2
+jobs:
+  rust/format:
+    docker:
+    - image: rust:1
+    steps:
+    - checkout
+    - run:
+        name: Update toolchain
+        command: |
+          test -z "stable" || echo "stable" >rust-toolchain
+          rustup show active-toolchain
+    - run:
+        name: Version information
+        command: |
+          rustup --version
+          rustc --version
+          cargo --version
+    - run:
+        name: Calculate dependencies
+        command: test -e Cargo.lock || cargo generate-lockfile
+    - run:
+        name: Check formatting
+        command: |
+          if rustup component add rustfmt; then
+            cargo fmt --all -- --check
+          else
+            echo Skipping rustfmt
+          fi
+  rust/clippy:
+    docker:
+    - image: rust:1
+    steps:
+    - checkout
+    - run:
+        name: Update toolchain
+        command: |
+          test -z "stable" || echo "stable" >rust-toolchain
+          rustup show active-toolchain
+    - run:
+        name: Version information
+        command: |
+          rustup --version
+          rustc --version
+          cargo --version
+    - run:
+        name: Calculate dependencies
+        command: test -e Cargo.lock || cargo generate-lockfile
+    - run:
+        name: Run clippy checks
+        command: |
+          if rustup component add clippy; then
+            cargo clippy --all --all-targets -- -Dwarnings -Drust-2018-idioms
+          else
+            echo Skipping clippy
+          fi
+  rust/test:
+    docker:
+    - image: rust:1
+    steps:
+    - checkout
+    - run:
+        name: Update toolchain
+        command: |
+          test -z "stable" || echo "stable" >rust-toolchain
+          rustup show active-toolchain
+    - run:
+        name: Version information
+        command: |
+          rustup --version
+          rustc --version
+          cargo --version
+    - run:
+        name: Calculate dependencies
+        command: |
+          rustc --version >rust-version
+          test -e Cargo.lock || cargo generate-lockfile
+    - restore_cache:
+        keys:
+        - v6-cargo-cache-{{arch}}-{{checksum "rust-version"}}-false-{{checksum "Cargo.lock"}}
+    - run:
+        name: Build all targets
+        command: cargo build --all --all-targets
+    - save_cache:
+        paths:
+        - /usr/local/cargo/registry
+        - target
+        key: v6-cargo-cache-{{arch}}-{{checksum "rust-version"}}-false-{{checksum "Cargo.lock"}}
+    - run:
+        name: Run all tests
+        command: cargo test --all
+workflows:
+  build:
+    jobs:
+    - rust/format
+    - rust/clippy
+    - rust/test
+  version: 2
