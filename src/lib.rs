@@ -62,7 +62,10 @@ use collector::COLLECTOR;
 
 pub use finalize::Finalize;
 pub use scan::{GcSafe, GcSafeWrapper, RMut, Scan, Scanner, R};
-pub use smart_ptr::{Gc, GcGuard, GcMutexGuard, GcPoisonError, GcRef, GcRefMut, GcTryLockError};
+pub use smart_ptr::{
+    Gc, GcGuard, GcMutexGuard, GcPoisonError, GcRef, GcRefMut, GcRwLockReadGuard,
+    GcRwLockWriteGuard, GcTryLockError,
+};
 
 // Re-export the Scan derive
 pub use shredder_derive::Scan;

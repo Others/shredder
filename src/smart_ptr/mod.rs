@@ -13,7 +13,9 @@ use crate::collector::{InternalGcRef, COLLECTOR};
 use crate::lockout::Warrant;
 use crate::{Finalize, Scan};
 
-pub use mutex::{GcMutexGuard, GcPoisonError, GcTryLockError};
+pub use mutex::{
+    GcMutexGuard, GcPoisonError, GcRwLockReadGuard, GcRwLockWriteGuard, GcTryLockError,
+};
 pub use refcell::{GcRef, GcRefMut};
 
 /// A smart-pointer for data tracked by `shredder` garbage collector
