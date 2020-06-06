@@ -1,15 +1,15 @@
 [package]
 name = "shredder"
 description = "Garbage collection as a library for Rust"
-categories = ["gc", "garbage collector"]
-keywords = ["gc"]
+categories = ["memory-management"]
+keywords = ["gc", "garbage", "collection", "garbage collection"]
 
 authors = ["Gregor Peach <gregorpeach@gmail.com>"]
 repository = "https://github.com/Others/shredder"
 readme = "README.md"
 license = "MIT"
 
-version = "0.1.0"
+version = "0.1.1-dev"
 edition = "2018"
 
 [dependencies]
