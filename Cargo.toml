@@ -1,6 +1,6 @@
 [package]
 name = "shredder"
-description = "A Garbage Collector for Rust"
+description = "Garbage collection as a library for Rust"
 categories = ["gc", "garbage collector"]
 keywords = ["gc"]
 
