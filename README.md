@@ -1,10 +1,11 @@
  shredder
  ========
+[![Version](https://img.shields.io/crates/v/shredder)](https://crates.io/crates/shredder)
+[![Docs](https://docs.rs/shredder/badge.svg)](https://docs.rs/shredder)
 [![License](https://img.shields.io/github/license/Others/shredder)](https://github.com/Others/shredder/blob/master/LICENSE.md)
 [![CircleCI](https://img.shields.io/circleci/build/github/Others/shredder)](https://app.circleci.com/pipelines/github/Others/shredder)
 [![Coverage Status](https://coveralls.io/repos/github/Others/shredder/badge.svg?branch=master)](https://coveralls.io/github/Others/shredder?branch=master)
 [![Dependencies](https://img.shields.io/librariesio/github/Others/shredder)](https://libraries.io/github/Others/shredder)
-[![Version](https://img.shields.io/crates/v/shredder)](https://crates.io/crates/shredder)
 
 `shredder` is a library providing a garbage collected smart pointer: `Gc`.
 This is useful for times when you want shared access to some data, but the structure
