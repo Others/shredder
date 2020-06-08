@@ -2,7 +2,7 @@
 name = "shredder"
 description = "Garbage collection as a library for Rust"
 categories = ["memory-management"]
-keywords = ["gc", "garbage", "collection", "garbage collection"]
+keywords = ["gc", "garbage", "collection", "garbage-collection"]
 
 authors = ["Gregor Peach <gregorpeach@gmail.com>"]
 repository = "https://github.com/Others/shredder"
