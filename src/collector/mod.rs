@@ -164,6 +164,20 @@ impl Collector {
         res
     }
 
+    #[inline]
+    fn notify_async_gc_thread(&self) {
+        // Note: We only send if there is room in the channel
+        // If there's already a notification there the async thread is already notified
+        select! {
+            send(self.async_gc_notifier, ()) -> res => {
+                if let Err(e) = res {
+                    error!("Could not notify async gc thread: {}", e);
+                }
+            },
+            default => (),
+        };
+    }
+
     fn get_unique_id(&self) -> u64 {
         self.monotonic_counter.fetch_add(1, Ordering::SeqCst)
     }
@@ -219,16 +233,7 @@ impl Collector {
         let res = (InternalGcRef::new(new_handle), heap_ptr);
 
         // When we allocate, the heuristic for whether we need to GC might change
-        // Note: We only send if there is room in the channel
-        // If there's already a notification there the async thread is already notified
-        select! {
-            send(self.async_gc_notifier, ()) -> res => {
-                if let Err(e) = res {
-                    error!("Could not notify async gc thread: {}", e);
-                }
-            },
-            default => (),
-        };
+        self.notify_async_gc_thread();
 
         res
     }
@@ -236,8 +241,8 @@ impl Collector {
     pub fn drop_handle(&self, handle: &InternalGcRef) {
         self.tracked_data.handles.remove(&handle.handle_ref);
 
-        // NOTE: We probably don't want to collect here since it can happen while we are dropping from a previous collection
-        // self.async_gc_chan.lock().send(());
+        // NOTE: This is worth experimenting with
+        // self.notify_async_gc_thread();
     }
 
     pub fn clone_handle(&self, handle: &InternalGcRef) -> InternalGcRef {
