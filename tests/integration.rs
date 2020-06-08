@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::mem::drop;
 use std::ops::Deref;
-use std::sync;
+use std::sync::{self, Arc, Mutex};
 
 use once_cell::sync::Lazy;
 
@@ -155,4 +155,69 @@ fn scan_skip_problem() {
         collect();
         assert_eq!(number_of_tracked_allocations(), 0);
     });
+}
+
+#[derive(Scan)]
+struct Finalizable<'a> {
+    #[shredder(skip)]
+    tracker: Arc<Mutex<String>>,
+    _marker: R<'a, str>,
+}
+
+unsafe impl<'a> Finalize for Finalizable<'a> {
+    unsafe fn finalize(&mut self) {
+        let mut tracker = self.tracker.lock().unwrap();
+        *tracker = String::from("finalized");
+    }
+}
+
+impl<'a> Drop for Finalizable<'a> {
+    fn drop(&mut self) {
+        let mut tracker = self.tracker.lock().unwrap();
+        *tracker = String::from("dropped");
+    }
+}
+
+#[test]
+fn drop_run() {
+    let _guard = TEST_MUTEX.lock();
+    let tracker = Arc::new(Mutex::new(String::from("none")));
+    run_with_gc_cleanup(|| {
+        let _to_drop = Gc::new(Finalizable {
+            tracker: tracker.clone(),
+            _marker: R::new("a static string, safe in drop :)"),
+        });
+    });
+    assert_eq!(&*(tracker.lock().unwrap()), "dropped");
+    assert_eq!(number_of_tracked_allocations(), 0);
+}
+
+#[test]
+fn finalizers_run() {
+    let _guard = TEST_MUTEX.lock();
+    let tracker = Arc::new(Mutex::new(String::from("none")));
+    run_with_gc_cleanup(|| {
+        let s = String::from("just a temp string");
+        let _to_drop = Gc::new_with_finalizer(Finalizable {
+            tracker: tracker.clone(),
+            _marker: R::new(&s),
+        });
+    });
+    assert_eq!(&*(tracker.lock().unwrap()), "finalized");
+    assert_eq!(number_of_tracked_allocations(), 0);
+}
+
+#[test]
+fn no_drop_functional() {
+    let _guard = TEST_MUTEX.lock();
+    let tracker = Arc::new(Mutex::new(String::from("none")));
+    run_with_gc_cleanup(|| {
+        let s = String::from("just a temp string");
+        let _to_drop = Gc::new_no_drop(Finalizable {
+            tracker: tracker.clone(),
+            _marker: R::new(&s),
+        });
+    });
+    assert_eq!(&*(tracker.lock().unwrap()), "none");
+    assert_eq!(number_of_tracked_allocations(), 0);
 }

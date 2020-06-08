@@ -65,3 +65,40 @@ impl_empty_finalize_for_static_type!(u64);
 
 impl_empty_finalize_for_static_type!(i128);
 impl_empty_finalize_for_static_type!(u128);
+
+#[cfg(test)]
+mod test {
+    use crate::Finalize;
+
+    macro_rules! test_no_panic_finalize {
+        ($t:ident, $v:expr) => {
+            paste::item! {
+                #[test]
+                fn [<finalize_no_panic_ $t>]() {
+                    let mut v: $t = $v;
+                    unsafe {
+                        v.finalize();
+                    }
+                }
+            }
+        };
+    }
+
+    test_no_panic_finalize!(isize, 1);
+    test_no_panic_finalize!(usize, 1);
+
+    test_no_panic_finalize!(i8, 1);
+    test_no_panic_finalize!(u8, 1);
+
+    test_no_panic_finalize!(i16, 1);
+    test_no_panic_finalize!(u16, 1);
+
+    test_no_panic_finalize!(i32, 1);
+    test_no_panic_finalize!(u32, 1);
+
+    test_no_panic_finalize!(i64, 1);
+    test_no_panic_finalize!(u64, 1);
+
+    test_no_panic_finalize!(i128, 1);
+    test_no_panic_finalize!(u128, 1);
+}

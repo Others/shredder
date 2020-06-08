@@ -144,7 +144,7 @@ impl_empty_scan_for_send_type!(Instant);
 // TODO(issue): https://github.com/Others/shredder/issues/5
 
 // Some other types are GcSafe, but not `Scan`
-unsafe impl<T: GcSafe> GcSafe for Arc<T> {}
+unsafe impl<T: GcSafe> GcSafe for Arc<T> where Arc<T>: Send {}
 
 // TODO(issue): https://github.com/Others/shredder/issues/4
 #[cfg(test)]

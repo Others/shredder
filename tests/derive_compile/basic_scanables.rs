@@ -1,7 +1,10 @@
 extern crate shredder;
 
-use shredder::Scan;
+use std::fmt::Debug;
+
 use shredder::GcSafe;
+use shredder::R;
+use shredder::Scan;
 
 struct NotScan {}
 unsafe impl GcSafe for NotScan {}
@@ -47,5 +50,20 @@ struct Test6 {
 
 #[derive(Scan)]
 struct Test7(#[shredder(unsafe_skip)] NotGcSafe);
+
+#[derive(Scan)]
+struct Test8<'a> {
+    r: R<'a, str>
+}
+
+#[derive(Scan)]
+struct Test9<'a, T> {
+    r: R<'a, T>
+}
+
+#[derive(Scan)]
+struct Test10<T: Scan + Debug> {
+    v: T
+}
 
 fn main() {}

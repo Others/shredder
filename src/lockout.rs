@@ -113,3 +113,29 @@ impl Drop for ExclusiveWarrant {
 }
 
 // TODO(issue): https://github.com/Others/shredder/issues/10
+#[cfg(test)]
+mod test {
+    use super::Lockout;
+
+    #[test]
+    fn warrant_prevents_exclusive_warrant() {
+        let lockout = Lockout::new();
+        let _warrant = lockout.get_warrant();
+        let exclusive_warrant_option = lockout.get_exclusive_warrant();
+        assert!(exclusive_warrant_option.is_none());
+    }
+
+    #[test]
+    fn exclusive_warrant_works_by_itself() {
+        let lockout = Lockout::new();
+        let exclusive_warrant_option = lockout.get_exclusive_warrant();
+        assert!(exclusive_warrant_option.is_some());
+    }
+
+    #[test]
+    fn multiple_warrants() {
+        let lockout = Lockout::new();
+        let _warrant_1 = lockout.get_warrant();
+        let _warrant_2 = lockout.get_warrant();
+    }
+}
