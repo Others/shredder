@@ -5,7 +5,8 @@ const DEFAULT_ALLOCATION_TRIGGER_PERCENT: f32 = 0.75;
 const DEFAULT_HANDLE_DEFICIT_TRIGGER_PERCENT: f32 = 0.9;
 const MIN_ALLOCATIONS_FOR_COLLECTION: f32 = 512.0 * 1.3;
 
-pub struct Trigger {
+/// Deals with deciding when we need to run a collection
+pub struct GcTrigger {
     data: Mutex<InternalTriggerData>,
 }
 
@@ -17,7 +18,7 @@ struct InternalTriggerData {
     data_count_at_last_collection: usize,
 }
 
-impl Trigger {
+impl GcTrigger {
     pub fn set_trigger_percent(&self, p: f32) {
         self.data.lock().allocations_trigger_percent = p;
     }
@@ -56,9 +57,9 @@ impl Trigger {
     }
 }
 
-impl Default for Trigger {
+impl Default for GcTrigger {
     fn default() -> Self {
-        Trigger {
+        GcTrigger {
             data: Mutex::new(InternalTriggerData {
                 allocations_trigger_percent: DEFAULT_ALLOCATION_TRIGGER_PERCENT,
                 handle_deficit_trigger_percent: DEFAULT_HANDLE_DEFICIT_TRIGGER_PERCENT,

@@ -71,6 +71,7 @@ pub use r::{RMut, R};
 /// ```
 ///
 /// In emergencies, you can break out `#[shredder(unsafe_skip)]`, but this is potentially unsafe
+/// (the field you're skipping MUST uphold invariants as-if it was `GcSafe`)
 /// ```
 /// use std::sync::Arc;
 /// use shredder::{Scan, GcSafeWrapper};
