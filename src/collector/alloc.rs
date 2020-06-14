@@ -6,12 +6,14 @@ use std::ptr;
 use crate::collector::InternalGcRef;
 use crate::{Finalize, Scan, Scanner};
 
+/// Represents a piece of data allocated by shredder
 #[derive(Copy, Clone, Debug, Hash)]
 pub struct GcAllocation {
     scan_ptr: *const dyn Scan,
     deallocation_action: DeallocationAction,
 }
 
+/// What additional action should we run before deallocating?
 #[derive(Copy, Clone, Debug, Hash)]
 pub enum DeallocationAction {
     DoNothing,
