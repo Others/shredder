@@ -8,8 +8,7 @@ use std::sync;
 
 use stable_deref_trait::StableDeref;
 
-use crate::collector::{InternalGcRef, COLLECTOR};
-use crate::lockout::Warrant;
+use crate::collector::{GcGuardWarrant, InternalGcRef, COLLECTOR};
 use crate::wrappers::{
     GcMutexGuard, GcPoisonError, GcRef, GcRefMut, GcRwLockReadGuard, GcRwLockWriteGuard,
     GcTryLockError,
@@ -251,7 +250,7 @@ where
 /// It exists as data needs protection from being scanned while it's being concurrently modified.
 pub struct GcGuard<'a, T: Scan> {
     gc_ptr: &'a Gc<T>,
-    _warrant: Warrant,
+    _warrant: GcGuardWarrant,
 }
 
 impl<'a, T: Scan> Deref for GcGuard<'a, T> {
