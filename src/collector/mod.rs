@@ -19,7 +19,7 @@ use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 use crate::collector::alloc::GcAllocation;
 use crate::collector::dropper::{BackgroundDropper, DropMessage};
 use crate::collector::trigger::GcTrigger;
-use crate::lockout::{ExclusiveWarrant, Lockout, Warrant};
+use crate::lockout::{ExclusiveWarrant, Lockout, LockoutProvider, Warrant};
 use crate::{Finalize, Scan};
 
 /// Intermediate struct. `Gc<T>` holds a `InternalGcRef`, which references a `GcHandle`
@@ -28,6 +28,7 @@ use crate::{Finalize, Scan};
 pub struct InternalGcRef {
     handle_ref: Arc<GcHandle>,
 }
+
 impl InternalGcRef {
     pub(crate) fn new(handle_ref: Arc<GcHandle>) -> Self {
         Self { handle_ref }
@@ -37,6 +38,14 @@ impl InternalGcRef {
         COLLECTOR.drop_handle(self);
     }
 }
+
+/// We don't want to expose what specific warrant provider we're using
+/// (this struct should be optimized away)
+pub struct GcGuardWarrant {
+    /// stores the internal warrant. only the drop being run is relevant
+    _warrant: Warrant<Arc<GcData>>,
+}
+type GcExclusiveWarrant = ExclusiveWarrant<Arc<GcData>>;
 
 pub struct Collector {
     /// just a monotonic counter. used to assign unique ids
@@ -74,12 +83,18 @@ pub(crate) struct GcData {
     /// a wrapper to manage (ie deallocate) the underlying allocation
     underlying_allocation: GcAllocation,
     /// lockout to prevent scanning the underlying data while it may be changing
-    lockout: Arc<Lockout>,
+    lockout: Lockout,
     /// have we started deallocating this piece of data yet?
     deallocated: AtomicBool,
     // During what collection was this last marked?
     //     0 if this is a new piece of data
     last_marked: AtomicU64,
+}
+
+impl LockoutProvider for Arc<GcData> {
+    fn provide(&self) -> &Lockout {
+        &self.lockout
+    }
 }
 
 impl Hash for GcData {
@@ -114,8 +129,6 @@ pub(crate) struct GcHandle {
     unique_id: u64,
     /// what data is backing this handle
     underlying_data: Arc<GcData>,
-    /// lockout to prevent scanning the underlying data while it may be changing
-    lockout: Arc<Lockout>,
     // During what collection was this last found in a piece of GcData?
     //     0 if this is a new piece of data
     last_non_rooted: AtomicU64,
@@ -227,12 +240,10 @@ impl Collector {
         gc_data_ptr: GcAllocation,
         heap_ptr: *const T,
     ) -> (InternalGcRef, *const T) {
-        let lockout = Lockout::new();
-
         let new_data = Arc::new(GcData {
             unique_id: self.get_unique_id(),
             underlying_allocation: gc_data_ptr,
-            lockout: lockout.clone(),
+            lockout: Lockout::new(),
             deallocated: AtomicBool::new(false),
             last_marked: AtomicU64::new(0),
         });
@@ -240,7 +251,6 @@ impl Collector {
         let new_handle = Arc::new(GcHandle {
             unique_id: self.get_unique_id(),
             underlying_data: new_data.clone(),
-            lockout,
             last_non_rooted: AtomicU64::new(0),
         });
 
@@ -271,7 +281,6 @@ impl Collector {
         let new_handle = Arc::new(GcHandle {
             unique_id: self.get_unique_id(),
             underlying_data: handle.handle_ref.underlying_data.clone(),
-            lockout: handle.handle_ref.lockout.clone(),
             last_non_rooted: AtomicU64::new(0),
         });
 
@@ -283,7 +292,7 @@ impl Collector {
     }
 
     #[allow(clippy::unused_self)]
-    pub fn get_data_warrant(&self, handle: &InternalGcRef) -> Warrant {
+    pub fn get_data_warrant(&self, handle: &InternalGcRef) -> GcGuardWarrant {
         // This check is only necessary in the destructors
         // The destructor thread will always set the `deallocated` flag before deallocating data
         let data_deallocated = handle
@@ -294,7 +303,10 @@ impl Collector {
         if data_deallocated {
             panic!("Tried to access into a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
         }
-        handle.handle_ref.lockout.get_warrant()
+
+        GcGuardWarrant {
+            _warrant: Lockout::get_warrant(handle.handle_ref.underlying_data.clone()),
+        }
     }
 
     pub fn tracked_data_count(&self) -> usize {
@@ -370,7 +382,7 @@ impl Collector {
         self.synchronize_destructors();
 
         // The warrant system prevents us from scanning in-use data
-        let warrants: SegQueue<ExclusiveWarrant> = SegQueue::new();
+        let warrants: SegQueue<GcExclusiveWarrant> = SegQueue::new();
 
         // eprintln!("tracked data {:?}", tracked_data);
         // eprintln!("tracked handles {:?}", tracked_handles);
@@ -386,7 +398,7 @@ impl Collector {
                     .store(current_collection - 1, Ordering::SeqCst);
             }
 
-            if let Some(warrant) = data.lockout.get_exclusive_warrant() {
+            if let Some(warrant) = Lockout::get_exclusive_warrant(data.clone()) {
                 // Save that warrant so things can't shift around under us
                 warrants.push(warrant);
 
@@ -519,8 +531,6 @@ pub(crate) fn get_mock_handle() -> InternalGcRef {
     }
     unsafe impl GcSafe for MockAllocation {}
 
-    let lockout = Lockout::new();
-
     let mock_scannable: Box<dyn Scan> = Box::new(MockAllocation);
 
     // Note: Here we assume a random u64 is unique. That's hacky, but is fine for testing :)
@@ -529,11 +539,10 @@ pub(crate) fn get_mock_handle() -> InternalGcRef {
         underlying_data: Arc::new(GcData {
             unique_id: rand::random(),
             underlying_allocation: unsafe { GcAllocation::raw(Box::into_raw(mock_scannable)) },
-            lockout: lockout.clone(),
+            lockout: Lockout::new(),
             deallocated: AtomicBool::new(false),
             last_marked: AtomicU64::new(0),
         }),
-        lockout,
         last_non_rooted: AtomicU64::new(0),
     }))
 }
