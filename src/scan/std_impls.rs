@@ -87,8 +87,10 @@ unsafe impl<T: Scan> Scan for Mutex<T> {
             Err(TryLockError::WouldBlock) => {
                 error!("A Mutex was in use when it was scanned -- something is buggy here! (no memory unsafety yet, so proceeding...)");
             }
-            Err(TryLockError::Poisoned(_)) => {
-                // TODO(issue): https://github.com/Others/shredder/issues/6
+            Err(TryLockError::Poisoned(poison_error)) => {
+                let inner_guard = poison_error.into_inner();
+                let raw: &T = inner_guard.deref();
+                scanner.scan(raw);
             }
         }
     }
@@ -106,8 +108,10 @@ unsafe impl<T: Scan> Scan for RwLock<T> {
             Err(TryLockError::WouldBlock) => {
                 error!("A RwLock was in use when it was scanned -- something is buggy here! (no memory unsafety yet, so proceeding...)");
             }
-            Err(TryLockError::Poisoned(_)) => {
-                // TODO(issue): https://github.com/Others/shredder/issues/6
+            Err(TryLockError::Poisoned(poison_error)) => {
+                let inner_guard = poison_error.into_inner();
+                let raw: &T = inner_guard.deref();
+                scanner.scan(raw);
             }
         }
     }
@@ -151,6 +155,8 @@ unsafe impl<T: GcSafe> GcSafe for Arc<T> where Arc<T>: Send {}
 mod test {
     use crate::collector::{get_mock_handle, InternalGcRef};
     use crate::{GcSafe, Scan, Scanner};
+    use std::panic::catch_unwind;
+    use std::sync::{Mutex, RwLock};
 
     struct MockGc {
         handle: InternalGcRef,
@@ -174,6 +180,82 @@ mod test {
             count += 1;
         });
         scanner.scan(&v);
+        drop(scanner);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn unpoisoned_mutex_scans() {
+        let m = Mutex::new(MockGc {
+            handle: get_mock_handle(),
+        });
+
+        let mut count = 0;
+        let mut scanner = Scanner::new(|_| {
+            count += 1;
+        });
+        scanner.scan(&m);
+
+        drop(scanner);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn poisoned_mutex_scans() {
+        let m = Mutex::new(MockGc {
+            handle: get_mock_handle(),
+        });
+
+        let catch_res = catch_unwind(|| {
+            let _guard = m.lock().unwrap();
+            panic!("test panic!");
+        });
+        assert!(catch_res.is_err());
+
+        let mut count = 0;
+        let mut scanner = Scanner::new(|_| {
+            count += 1;
+        });
+        scanner.scan(&m);
+
+        drop(scanner);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn unpoisoned_rwlock_scans() {
+        let m = RwLock::new(MockGc {
+            handle: get_mock_handle(),
+        });
+
+        let mut count = 0;
+        let mut scanner = Scanner::new(|_| {
+            count += 1;
+        });
+        scanner.scan(&m);
+
+        drop(scanner);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn poisoned_rwlock_scans() {
+        let m = RwLock::new(MockGc {
+            handle: get_mock_handle(),
+        });
+
+        let catch_res = catch_unwind(|| {
+            let _guard = m.read().unwrap();
+            panic!("test panic!");
+        });
+        assert!(catch_res.is_err());
+
+        let mut count = 0;
+        let mut scanner = Scanner::new(|_| {
+            count += 1;
+        });
+        scanner.scan(&m);
+
         drop(scanner);
         assert_eq!(count, 1);
     }
