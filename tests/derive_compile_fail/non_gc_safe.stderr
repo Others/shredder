@@ -2,6 +2,10 @@ error[E0277]: the trait bound `NotGcSafe: shredder::GcSafe` is not satisfied
  --> $DIR/non_gc_safe.rs:6:10
   |
 6 | #[derive(Scan)]
-  |          ^^^^ the trait `shredder::GcSafe` is not implemented for `NotGcSafe`
+  |          ^^^^
+  |          |
+  |          expected an implementor of trait `shredder::GcSafe`
+  |          help: consider borrowing here: `&Scan`
   |
+  = note: required because of the requirements on the impl of `shredder::GcSafe` for `NotGcSafe`
   = note: this error originates in a derive macro (in Nightly builds, run with -Z macro-backtrace for more info)

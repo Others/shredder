@@ -2,6 +2,10 @@ error[E0277]: the trait bound `NotScan: shredder::Scan` is not satisfied
  --> $DIR/non_scan.rs:6:10
   |
 6 | #[derive(Scan)]
-  |          ^^^^ the trait `shredder::Scan` is not implemented for `NotScan`
+  |          ^^^^
+  |          |
+  |          expected an implementor of trait `shredder::Scan`
+  |          help: consider borrowing here: `&Scan`
   |
+  = note: required because of the requirements on the impl of `shredder::Scan` for `NotScan`
   = note: this error originates in a derive macro (in Nightly builds, run with -Z macro-backtrace for more info)
