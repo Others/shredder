@@ -5,17 +5,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex, RwLock, TryLockError};
 use std::time::{Duration, Instant};
 
-use crate::{GcSafe, Scan, Scanner};
-
-macro_rules! impl_empty_scan_for_send_type {
-    ( $t:ty ) => {
-        unsafe impl GcSafe for $t where $t: Send {}
-        unsafe impl Scan for $t {
-            #[inline(always)]
-            fn scan(&self, _: &mut Scanner<'_>) {}
-        }
-    };
-}
+use crate::{EmptyScan, GcSafe, Scan, Scanner};
 
 // For collections that own their elements, Collection<T>: Scan iff T: Scan
 // Safety: GcSafe is a structural property for normally Send collections
@@ -119,30 +109,30 @@ unsafe impl<T: Scan> Scan for RwLock<T> {
 unsafe impl<T: GcSafe> GcSafe for RwLock<T> {}
 
 // Primitives do not hold any Gc<T>s
-impl_empty_scan_for_send_type!(isize);
-impl_empty_scan_for_send_type!(usize);
+impl EmptyScan for isize {}
+impl EmptyScan for usize {}
 
-impl_empty_scan_for_send_type!(i8);
-impl_empty_scan_for_send_type!(u8);
+impl EmptyScan for i8 {}
+impl EmptyScan for u8 {}
 
-impl_empty_scan_for_send_type!(i16);
-impl_empty_scan_for_send_type!(u16);
+impl EmptyScan for i16 {}
+impl EmptyScan for u16 {}
 
-impl_empty_scan_for_send_type!(i32);
-impl_empty_scan_for_send_type!(u32);
+impl EmptyScan for i32 {}
+impl EmptyScan for u32 {}
 
-impl_empty_scan_for_send_type!(i64);
-impl_empty_scan_for_send_type!(u64);
+impl EmptyScan for i64 {}
+impl EmptyScan for u64 {}
 
-impl_empty_scan_for_send_type!(i128);
-impl_empty_scan_for_send_type!(u128);
+impl EmptyScan for i128 {}
+impl EmptyScan for u128 {}
 
 // It's nice if other send types from std also get the scan treatment
 // These are value types that have no internal content needing a scan
-impl_empty_scan_for_send_type!(String);
+impl EmptyScan for String {}
 
-impl_empty_scan_for_send_type!(Duration);
-impl_empty_scan_for_send_type!(Instant);
+impl EmptyScan for Duration {}
+impl EmptyScan for Instant {}
 
 // impl you need missing? Check the link!
 // TODO(issue): https://github.com/Others/shredder/issues/5

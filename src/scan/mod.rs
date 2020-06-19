@@ -1,3 +1,4 @@
+mod helper;
 mod r;
 mod std_impls;
 
@@ -7,6 +8,7 @@ use std::ops::{Deref, DerefMut};
 use crate::collector::InternalGcRef;
 use crate::Gc;
 
+pub use helper::EmptyScan;
 pub use r::{RMut, R};
 
 /// A trait capturing the ability of data to be scanned for references to data in a `Gc`.
@@ -104,6 +106,16 @@ pub unsafe trait Scan: GcSafe {
 /// NOTE: `GcSafe` cannot simply be `Send`, since `Gc` must be `GcSafe` but sometimes is not `Send`
 pub unsafe trait GcSafe {}
 
+// FIXME: This macro can be removed once we have overlapping marker traits
+//        (https://github.com/rust-lang/rust/issues/29864)
+/// A `Send` type can be safely marked as `GcSafe`, and this macro eases that implementation
+#[macro_export]
+macro_rules! mark_send_type_gc_safe {
+    ( $t:ty ) => {
+        unsafe impl GcSafe for $t where $t: Send {}
+    };
+}
+
 /// Scanner is a struct used to manage the scanning of data, sort of analogous to `Hasher`
 /// Usually you will only care about this while implementing `Scan`
 pub struct Scanner<'a> {
@@ -144,16 +156,6 @@ unsafe impl<T: Scan> Scan for Gc<T> {
     }
 }
 unsafe impl<T: Scan> GcSafe for Gc<T> {}
-
-// FIXME: This macro can be removed once we have overlapping marker traits
-//        (https://github.com/rust-lang/rust/issues/29864)
-/// A `Send` type can be safely marked as `GcSafe`, and this macro eases that implementation
-#[macro_export]
-macro_rules! mark_send_type_gc_safe {
-    ( $t:ty ) => {
-        unsafe impl GcSafe for $t where $t: Send {}
-    };
-}
 
 /// `GcSafeWrapper` wraps a `Send` datatype to make it `GcSafe`
 /// See the documentation of `Send` to see where this would be useful

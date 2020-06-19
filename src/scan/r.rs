@@ -1,23 +1,14 @@
+use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use crate::{GcSafe, Scan, Scanner};
-use std::cmp::Ordering;
+use crate::{EmptyScan, GcSafe, Scan, Scanner};
 
 // Only straight up `'static` references can be `Scan` or `GcSafe`, since other references may
 // become invalid after their lifetime ends
-unsafe impl<T> Scan for &'static T {
-    #[inline(always)]
-    fn scan(&self, _: &mut Scanner<'_>) {}
-}
-unsafe impl<T> GcSafe for &'static T {}
-
-unsafe impl<T> Scan for &'static mut T {
-    #[inline(always)]
-    fn scan(&self, _: &mut Scanner<'_>) {}
-}
-unsafe impl<T> GcSafe for &'static mut T {}
+impl<T> EmptyScan for &'static T where &'static T: Send {}
+impl<T> EmptyScan for &'static mut T where &'static mut T: Send {}
 
 // But other references can become safe through careful manipulation!
 
