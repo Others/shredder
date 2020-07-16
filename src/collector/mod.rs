@@ -416,14 +416,18 @@ impl Collector {
         });
 
         // The handles that were not just marked need to be treated as roots
-        let mut roots = Vec::new();
-        for ele in self.tracked_data.handles.iter() {
-            let handle = ele.key();
-            // If the `last_non_rooted` number was not now, then it is a root
-            if handle.last_non_rooted.load(Ordering::SeqCst) != current_collection {
-                roots.push(handle.clone());
-            }
-        }
+        let roots = SegQueue::new();
+        self.tracked_data
+            .handles
+            .iter()
+            .par_bridge()
+            .for_each(|ele| {
+                let handle = ele.key();
+                // If the `last_non_rooted` number was not now, then it is a root
+                if handle.last_non_rooted.load(Ordering::SeqCst) != current_collection {
+                    roots.push(handle.clone());
+                }
+            });
 
         // eprintln!("roots {:?}", roots);
 
