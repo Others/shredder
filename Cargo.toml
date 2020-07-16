@@ -15,10 +15,10 @@ edition = "2018"
 [dependencies]
 crossbeam = "0.7.3"
 dashmap = { version = "3.11", features = ["raw-api"] }
-dynqueue = "0.1.2"
+dynqueue = { version = "0.1.3", features = ["crossbeam-queue"] }
 log = "0.4.8"
 once_cell = "1.4"
-parking_lot = "0.10.2"
+parking_lot = "0.11.0"
 rayon = "1.3"
 rental = "0.5.5"
 shredder_derive = "0.1.1"
