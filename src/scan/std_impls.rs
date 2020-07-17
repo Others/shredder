@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 use std::ops::Deref;
@@ -41,6 +41,18 @@ unsafe impl<K: Scan, V: Scan, S: BuildHasher> Scan for HashMap<K, V, S> {
 }
 // FIXME: Would a bad build hasher cause problems?
 unsafe impl<K: GcSafe, V: GcSafe, S: BuildHasher> GcSafe for HashMap<K, V, S> {}
+
+unsafe impl<T: Copy> Scan for Cell<T>
+where
+    T: GcSafe,
+{
+    #[inline(always)]
+    fn scan(&self, _: &mut Scanner<'_>) {
+        // A `Copy` type cannot contain a `Gc` so we can make this empty
+        // TODO: Document this so we can update this method if this changes
+    }
+}
+unsafe impl<T: GcSafe> GcSafe for Cell<T> {}
 
 unsafe impl<T: Scan> Scan for RefCell<T> {
     #[inline]
@@ -143,10 +155,12 @@ unsafe impl<T: GcSafe> GcSafe for Arc<T> where Arc<T>: Send {}
 // TODO(issue): https://github.com/Others/shredder/issues/4
 #[cfg(test)]
 mod test {
-    use crate::collector::{get_mock_handle, InternalGcRef};
-    use crate::{GcSafe, Scan, Scanner};
+    use std::cell::Cell;
     use std::panic::catch_unwind;
     use std::sync::{Mutex, RwLock};
+
+    use crate::collector::{get_mock_handle, InternalGcRef};
+    use crate::{GcSafe, Scan, Scanner};
 
     struct MockGc {
         handle: InternalGcRef,
@@ -156,6 +170,18 @@ mod test {
         fn scan(&self, scanner: &mut Scanner<'_>) {
             (scanner.scan_callback)(self.handle.clone());
         }
+    }
+
+    #[test]
+    fn cell_scans() {
+        let cell2: Cell<Option<u32>> = Cell::new(None);
+        let mut count = 0;
+        let mut scanner = Scanner::new(|_| {
+            count += 1;
+        });
+        scanner.scan(&cell2);
+        drop(scanner);
+        assert_eq!(count, 0);
     }
 
     #[test]
