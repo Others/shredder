@@ -9,7 +9,7 @@ repository = "https://github.com/Others/shredder"
 readme = "README.md"
 license = "MIT"
 
-version = "0.1.2-dev"
+version = "0.1.2"
 edition = "2018"
 
 [dependencies]
