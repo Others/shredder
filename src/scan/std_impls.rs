@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::BuildHasher;
 use std::ops::Deref;
 use std::sync::{Arc, Mutex, RwLock, TryLockError};
@@ -41,6 +41,29 @@ unsafe impl<K: Scan, V: Scan, S: BuildHasher> Scan for HashMap<K, V, S> {
 }
 // FIXME: Would a bad build hasher cause problems?
 unsafe impl<K: GcSafe, V: GcSafe, S: BuildHasher> GcSafe for HashMap<K, V, S> {}
+
+unsafe impl<T: Scan> Scan for BTreeSet<T> {
+    #[inline]
+    fn scan(&self, scanner: &mut Scanner<'_>) {
+        for e in self {
+            scanner.scan(e)
+        }
+    }
+}
+
+unsafe impl<T: GcSafe> GcSafe for BTreeSet<T> {}
+
+unsafe impl<K: Scan, V: Scan> Scan for BTreeMap<K, V> {
+    #[inline]
+    fn scan(&self, scanner: &mut Scanner<'_>) {
+        for (k, v) in self {
+            scanner.scan(k);
+            scanner.scan(v);
+        }
+    }
+}
+
+unsafe impl<K: GcSafe, V: GcSafe> GcSafe for BTreeMap<K, V> {}
 
 unsafe impl<T: Copy> Scan for Cell<T>
 where
