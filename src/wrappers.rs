@@ -13,14 +13,14 @@ rental! {
 
         /// Self referential wrapper around `Ref` for ergonomics
         #[rental(deref_suffix)]
-        pub struct GcRefInt<'a, T: Scan + ?Sized + 'static> {
+        pub struct GcRefInt<'a, T: Scan + 'static> {
             gc_guard: GcGuard<'a, RefCell<T>>,
             cell_ref: Ref<'gc_guard, T>
         }
 
         /// Self referential wrapper around `RefMut` for ergonomics
         #[rental(deref_mut_suffix)]
-        pub struct GcRefMutInt<'a, T: Scan + ?Sized + 'static> {
+        pub struct GcRefMutInt<'a, T: Scan + 'static> {
             gc_guard: GcGuard<'a, RefCell<T>>,
             cell_ref: RefMut<'gc_guard, T>
         }
@@ -28,7 +28,7 @@ rental! {
 }
 
 /// This is like a `Ref`, but taken directly from a `Gc`
-pub struct GcRef<'a, T: Scan + ?Sized + 'static> {
+pub struct GcRef<'a, T: Scan + 'static> {
     internal_ref: gc_refcell_internals::GcRefInt<'a, T>,
 }
 
@@ -38,7 +38,7 @@ impl<T: Scan + 'static + Debug> Debug for GcRef<'_, T> {
     }
 }
 
-impl<'a, T: Scan + ?Sized + 'static> GcRef<'a, T> {
+impl<'a, T: Scan + 'static> GcRef<'a, T> {
     pub(crate) fn borrow(g: GcGuard<'a, RefCell<T>>) -> Self {
         let internal_ref = gc_refcell_internals::GcRefInt::new(g, RefCell::borrow);
         Self { internal_ref }
@@ -52,7 +52,7 @@ impl<'a, T: Scan + ?Sized + 'static> GcRef<'a, T> {
     }
 }
 
-impl<'a, T: Scan + ?Sized + 'static> Deref for GcRef<'a, T> {
+impl<'a, T: Scan + 'static> Deref for GcRef<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -61,11 +61,11 @@ impl<'a, T: Scan + ?Sized + 'static> Deref for GcRef<'a, T> {
 }
 
 /// This is like a `RefMut`, but taken directly from a `Gc`
-pub struct GcRefMut<'a, T: Scan + ?Sized + 'static> {
+pub struct GcRefMut<'a, T: Scan + 'static> {
     internal_ref: gc_refcell_internals::GcRefMutInt<'a, T>,
 }
 
-impl<'a, T: Scan + ?Sized + 'static> GcRefMut<'a, T> {
+impl<'a, T: Scan + 'static> GcRefMut<'a, T> {
     pub(crate) fn borrow_mut(g: GcGuard<'a, RefCell<T>>) -> Self {
         let internal_ref = gc_refcell_internals::GcRefMutInt::new(g, RefCell::borrow_mut);
         Self { internal_ref }
@@ -87,7 +87,7 @@ impl<T: Scan + 'static + Debug> Debug for GcRefMut<'_, T> {
     }
 }
 
-impl<'a, T: Scan + ?Sized + 'static> Deref for GcRefMut<'a, T> {
+impl<'a, T: Scan + 'static> Deref for GcRefMut<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -95,7 +95,7 @@ impl<'a, T: Scan + ?Sized + 'static> Deref for GcRefMut<'a, T> {
     }
 }
 
-impl<'a, T: Scan + ?Sized + 'static> DerefMut for GcRefMut<'a, T> {
+impl<'a, T: Scan + 'static> DerefMut for GcRefMut<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.internal_ref.deref_mut()
     }
@@ -135,7 +135,7 @@ rental! {
 
         /// Self referential wrapper around `MutexGuard` for ergonomics
         #[rental(deref_mut_suffix)]
-        pub struct GcMutexGuardInt<'a, T: Scan + ?Sized + 'static> {
+        pub struct GcMutexGuardInt<'a, T: Scan + 'static> {
             gc_guard: GcGuard<'a, Mutex<T>>,
             cell_ref: MutexGuard<'gc_guard, T>
         }
@@ -143,11 +143,11 @@ rental! {
 }
 
 /// This is like a `MutexGuard`, but taken directly from a `Gc`
-pub struct GcMutexGuard<'a, T: Scan + ?Sized + 'static> {
+pub struct GcMutexGuard<'a, T: Scan + 'static> {
     internal_guard: gc_mutex_internals::GcMutexGuardInt<'a, T>,
 }
 
-impl<'a, T: Scan + ?Sized + 'static> GcMutexGuard<'a, T> {
+impl<'a, T: Scan + 'static> GcMutexGuard<'a, T> {
     pub(crate) fn lock(g: GcGuard<'a, sync::Mutex<T>>) -> Result<Self, GcPoisonError<Self>> {
         let mut was_poisoned = false;
         let internal_guard = gc_mutex_internals::GcMutexGuardInt::new(g, |g| match g.lock() {
@@ -192,7 +192,7 @@ impl<'a, T: Scan + ?Sized + 'static> GcMutexGuard<'a, T> {
     }
 }
 
-impl<T: Scan + ?Sized + 'static> Deref for GcMutexGuard<'_, T> {
+impl<T: Scan + 'static> Deref for GcMutexGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -200,7 +200,7 @@ impl<T: Scan + ?Sized + 'static> Deref for GcMutexGuard<'_, T> {
     }
 }
 
-impl<T: Scan + ?Sized + 'static> DerefMut for GcMutexGuard<'_, T> {
+impl<T: Scan + 'static> DerefMut for GcMutexGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.internal_guard.deref_mut()
     }
@@ -222,14 +222,14 @@ rental! {
 
         /// Self referential wrapper around `RwLockReadGuard` for ergonomics
         #[rental(deref_suffix)]
-        pub struct GcRwLockReadGuardInternal<'a, T: Scan + ?Sized + 'static> {
+        pub struct GcRwLockReadGuardInternal<'a, T: Scan + 'static> {
             gc_guard: GcGuard<'a, RwLock<T>>,
             cell_ref: RwLockReadGuard<'gc_guard, T>
         }
 
         /// Self referential wrapper around `RwLockReadGuard` for ergonomics
         #[rental(deref_mut_suffix)]
-        pub struct GcRwLockWriteGuardInternal<'a, T: Scan + ?Sized + 'static> {
+        pub struct GcRwLockWriteGuardInternal<'a, T: Scan + 'static> {
             gc_guard: GcGuard<'a, RwLock<T>>,
             cell_ref: RwLockWriteGuard<'gc_guard, T>
         }
@@ -237,11 +237,11 @@ rental! {
 }
 
 /// A wrapper around a `RwLockReadGuard` taken directly from a `Gc`
-pub struct GcRwLockReadGuard<'a, T: Scan + ?Sized + 'static> {
+pub struct GcRwLockReadGuard<'a, T: Scan + 'static> {
     internal_guard: gc_rwlock_internals::GcRwLockReadGuardInternal<'a, T>,
 }
 
-impl<'a, T: Scan + ?Sized + 'static> GcRwLockReadGuard<'a, T> {
+impl<'a, T: Scan + 'static> GcRwLockReadGuard<'a, T> {
     pub(crate) fn read(g: GcGuard<'a, sync::RwLock<T>>) -> Result<Self, GcPoisonError<Self>> {
         let mut was_poisoned = false;
         let internal_guard =
@@ -296,7 +296,7 @@ impl<T: Scan + 'static + Debug> Debug for GcRwLockReadGuard<'_, T> {
     }
 }
 
-impl<'a, T: Scan + ?Sized + 'static> Deref for GcRwLockReadGuard<'a, T> {
+impl<'a, T: Scan + 'static> Deref for GcRwLockReadGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -305,11 +305,11 @@ impl<'a, T: Scan + ?Sized + 'static> Deref for GcRwLockReadGuard<'a, T> {
 }
 
 /// A wrapper around a `RwLockWriteGuard` taken directly from a `Gc`
-pub struct GcRwLockWriteGuard<'a, T: Scan + ?Sized + 'static> {
+pub struct GcRwLockWriteGuard<'a, T: Scan + 'static> {
     internal_guard: gc_rwlock_internals::GcRwLockWriteGuardInternal<'a, T>,
 }
 
-impl<'a, T: Scan + ?Sized + 'static> GcRwLockWriteGuard<'a, T> {
+impl<'a, T: Scan + 'static> GcRwLockWriteGuard<'a, T> {
     pub(crate) fn write(g: GcGuard<'a, sync::RwLock<T>>) -> Result<Self, GcPoisonError<Self>> {
         let mut was_poisoned = false;
         let internal_guard =
@@ -363,7 +363,7 @@ impl<T: Scan + 'static + Debug> Debug for GcRwLockWriteGuard<'_, T> {
     }
 }
 
-impl<'a, T: Scan + ?Sized + 'static> Deref for GcRwLockWriteGuard<'a, T> {
+impl<'a, T: Scan + 'static> Deref for GcRwLockWriteGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -371,7 +371,7 @@ impl<'a, T: Scan + ?Sized + 'static> Deref for GcRwLockWriteGuard<'a, T> {
     }
 }
 
-impl<'a, T: Scan + ?Sized + 'static> DerefMut for GcRwLockWriteGuard<'a, T> {
+impl<'a, T: Scan + 'static> DerefMut for GcRwLockWriteGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.internal_guard.deref_mut()
     }

@@ -291,7 +291,7 @@ impl<'a, T: Scan + Debug> Debug for GcGuard<'a, T> {
 }
 
 // Special casing goes here, mostly so rustdoc documents it in the right order
-impl<T: Scan + ?Sized + 'static> Gc<RefCell<T>> {
+impl<T: Scan + 'static> Gc<RefCell<T>> {
     /// Call the underlying `borrow` method on the `RefCell`.
     ///
     /// This is just a nice method so you don't have to call `get` manually.
@@ -332,7 +332,7 @@ impl<T: Scan + ?Sized + 'static> Gc<RefCell<T>> {
     }
 }
 
-impl<T: Scan + ?Sized + 'static> Gc<sync::Mutex<T>> {
+impl<T: Scan + 'static> Gc<sync::Mutex<T>> {
     /// Call the underlying `lock` method on the inner `Mutex`
     ///
     /// This is just a nice method so you don't have to `get` manually
@@ -357,7 +357,7 @@ impl<T: Scan + ?Sized + 'static> Gc<sync::Mutex<T>> {
     }
 }
 
-impl<T: Scan + ?Sized + 'static> Gc<sync::RwLock<T>> {
+impl<T: Scan + 'static> Gc<sync::RwLock<T>> {
     /// Call the underlying `read` method on the inner `RwLock`
     ///
     /// This is just a nice method so you don't have to `get` manually
