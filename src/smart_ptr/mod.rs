@@ -16,12 +16,12 @@ use crate::wrappers::{
 use crate::{Finalize, Scan};
 
 /// A smart-pointer for data tracked by `shredder` garbage collector
-pub struct Gc<T: Scan> {
+pub struct Gc<T: Scan + ?Sized> {
     backing_handle: InternalGcRef,
     direct_ptr: *const T,
 }
 
-impl<T: Scan> Gc<T> {
+impl<T: Scan + ?Sized> Gc<T> {
     /// Create a new `Gc` containing the given data.
     /// `T: 'static` in order to create a `Gc<T>` with this method.
     /// If your `T` is not static, consider `new_with_finalizer`.
@@ -33,7 +33,7 @@ impl<T: Scan> Gc<T> {
     /// when relying on this guarantee.
     pub fn new(v: T) -> Self
     where
-        T: 'static,
+        T: Sized + 'static,
     {
         let (handle, ptr) = COLLECTOR.track_with_drop(v);
         Self {
@@ -47,7 +47,9 @@ impl<T: Scan> Gc<T> {
     ///
     /// When this data is garbage collected, its `drop` implementation will NOT be run.
     /// Be careful using this method! It can lead to memory leaks!
-    pub fn new_no_drop(v: T) -> Self {
+    pub fn new_no_drop(v: T) -> Self
+        where T: Sized
+    {
         let (handle, ptr) = COLLECTOR.track_with_no_drop(v);
         Self {
             backing_handle: handle,
@@ -66,7 +68,7 @@ impl<T: Scan> Gc<T> {
     /// the program to terminate before the background thread runs `finalize`. So be careful!
     pub fn new_with_finalizer(v: T) -> Self
     where
-        T: Finalize,
+        T: Sized + Finalize,
     {
         let (handle, ptr) = COLLECTOR.track_with_finalization(v);
         Self {
@@ -94,7 +96,7 @@ impl<T: Scan> Gc<T> {
     }
 }
 
-impl<T: Scan> Clone for Gc<T> {
+impl<T: Scan + ?Sized> Clone for Gc<T> {
     #[must_use]
     fn clone(&self) -> Self {
         let new_handle = COLLECTOR.clone_handle(&self.backing_handle);
@@ -107,12 +109,12 @@ impl<T: Scan> Clone for Gc<T> {
 }
 
 // Same bounds as Arc<T>
-unsafe impl<T: Scan> Sync for Gc<T> where T: Sync + Send {}
-unsafe impl<T: Scan> Send for Gc<T> where T: Sync + Send {}
+unsafe impl<T: Scan + ?Sized> Sync for Gc<T> where T: Sync + Send {}
+unsafe impl<T: Scan + ?Sized> Send for Gc<T> where T: Sync + Send {}
 // Since we can clone Gc<T>, being able to send a Gc<T> implies possible sharing between threads
 // (Thus for Gc<T> to be send, T must be Send and Sync)
 
-impl<T: Scan> Drop for Gc<T> {
+impl<T: Scan + ?Sized> Drop for Gc<T> {
     fn drop(&mut self) {
         self.backing_handle.invalidate();
     }
@@ -121,7 +123,7 @@ impl<T: Scan> Drop for Gc<T> {
 // TODO: Implement GRwLock along the same lines
 
 // Lots of traits it's good for a smart ptr to implement:
-impl<T: Scan> Debug for Gc<T> {
+impl<T: Scan + ?Sized> Debug for Gc<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("Gc")
             .field("backing_handle", &"<SNIP>")
@@ -130,7 +132,7 @@ impl<T: Scan> Debug for Gc<T> {
     }
 }
 
-impl<T: Scan> Default for Gc<T>
+impl<T: Scan + ?Sized> Default for Gc<T>
 where
     T: Default + 'static,
 {
@@ -141,7 +143,7 @@ where
     }
 }
 
-impl<T: Scan> Display for Gc<T>
+impl<T: Scan + ?Sized> Display for Gc<T>
 where
     T: Display,
 {
@@ -151,15 +153,15 @@ where
     }
 }
 
-impl<T: Scan> fmt::Pointer for Gc<T> {
+impl<T: Scan + ?Sized> fmt::Pointer for Gc<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         fmt::Pointer::fmt(&self.direct_ptr, f)
     }
 }
 
-impl<T: Scan> Eq for Gc<T> where T: Eq {}
+impl<T: Scan + ?Sized> Eq for Gc<T> where T: Eq {}
 
-impl<T: Scan> Hash for Gc<T>
+impl<T: Scan + ?Sized> Hash for Gc<T>
 where
     T: Hash,
 {
@@ -168,7 +170,7 @@ where
     }
 }
 
-impl<T: Scan> Ord for Gc<T>
+impl<T: Scan + ?Sized> Ord for Gc<T>
 where
     T: Ord,
 {
@@ -182,7 +184,7 @@ where
 }
 
 #[allow(clippy::partialeq_ne_impl)]
-impl<T: Scan> PartialEq for Gc<T>
+impl<T: Scan + ?Sized> PartialEq for Gc<T>
 where
     T: PartialEq,
 {
@@ -201,7 +203,7 @@ where
     }
 }
 
-impl<T: Scan> PartialOrd for Gc<T>
+impl<T: Scan + ?Sized> PartialOrd for Gc<T>
 where
     T: PartialOrd,
 {
@@ -248,12 +250,12 @@ where
 
 /// A guard object that lets you access the underlying data of a `Gc`.
 /// It exists as data needs protection from being scanned while it's being concurrently modified.
-pub struct GcGuard<'a, T: Scan> {
+pub struct GcGuard<'a, T: Scan + ?Sized> {
     gc_ptr: &'a Gc<T>,
     _warrant: GcGuardWarrant,
 }
 
-impl<'a, T: Scan> Deref for GcGuard<'a, T> {
+impl<'a, T: Scan + ?Sized> Deref for GcGuard<'a, T> {
     type Target = T;
 
     #[must_use]
@@ -263,16 +265,16 @@ impl<'a, T: Scan> Deref for GcGuard<'a, T> {
 }
 
 /// It is impossible for the value behind a `GcGuard` to move (since it's basically a `&T`)
-unsafe impl<'a, T: Scan> StableDeref for GcGuard<'a, T> {}
+unsafe impl<'a, T: Scan + ?Sized> StableDeref for GcGuard<'a, T> {}
 
-impl<'a, T: Scan> AsRef<T> for GcGuard<'a, T> {
+impl<'a, T: Scan + ?Sized> AsRef<T> for GcGuard<'a, T> {
     #[must_use]
     fn as_ref(&self) -> &T {
         self.deref()
     }
 }
 
-impl<'a, T: Scan> Borrow<T> for GcGuard<'a, T> {
+impl<'a, T: Scan + ?Sized> Borrow<T> for GcGuard<'a, T> {
     #[must_use]
     fn borrow(&self) -> &T {
         self.deref()
@@ -289,7 +291,7 @@ impl<'a, T: Scan + Debug> Debug for GcGuard<'a, T> {
 }
 
 // Special casing goes here, mostly so rustdoc documents it in the right order
-impl<T: Scan + 'static> Gc<RefCell<T>> {
+impl<T: Scan + ?Sized + 'static> Gc<RefCell<T>> {
     /// Call the underlying `borrow` method on the `RefCell`.
     ///
     /// This is just a nice method so you don't have to call `get` manually.
@@ -330,7 +332,7 @@ impl<T: Scan + 'static> Gc<RefCell<T>> {
     }
 }
 
-impl<T: Scan + 'static> Gc<sync::Mutex<T>> {
+impl<T: Scan + ?Sized + 'static> Gc<sync::Mutex<T>> {
     /// Call the underlying `lock` method on the inner `Mutex`
     ///
     /// This is just a nice method so you don't have to `get` manually
@@ -355,7 +357,7 @@ impl<T: Scan + 'static> Gc<sync::Mutex<T>> {
     }
 }
 
-impl<T: Scan + 'static> Gc<sync::RwLock<T>> {
+impl<T: Scan + ?Sized + 'static> Gc<sync::RwLock<T>> {
     /// Call the underlying `read` method on the inner `RwLock`
     ///
     /// This is just a nice method so you don't have to `get` manually

@@ -132,7 +132,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// Scan a piece of data, tracking any `Gc`s found
-    pub fn scan<T: Scan>(&mut self, from: &T) {
+    pub fn scan<T: Scan + ?Sized>(&mut self, from: &T) {
         from.scan(self);
     }
 
@@ -141,21 +141,21 @@ impl<'a> Scanner<'a> {
     #[doc(hidden)]
     pub fn check_gc_safe<T: GcSafe>(&self, _: &T) {}
 
-    fn add_internal_handle<T: Scan>(&mut self, gc: &Gc<T>) {
+    fn add_internal_handle<T: Scan + ?Sized>(&mut self, gc: &Gc<T>) {
         (self.scan_callback)(gc.internal_handle());
     }
 }
 
 // This is a fundamental implementation, since it's how GcInternalHandles make it into the Scanner
 // Safety: The implementation is built around this, so it's by definition safe
-unsafe impl<T: Scan> Scan for Gc<T> {
+unsafe impl<T: Scan + ?Sized> Scan for Gc<T> {
     #[allow(clippy::inline_always)]
     #[inline(always)]
     fn scan(&self, scanner: &mut Scanner<'_>) {
         scanner.add_internal_handle(self)
     }
 }
-unsafe impl<T: Scan> GcSafe for Gc<T> {}
+unsafe impl<T: Scan + ?Sized> GcSafe for Gc<T> {}
 
 /// `GcSafeWrapper` wraps a `Send` datatype to make it `GcSafe`
 /// See the documentation of `Send` to see where this would be useful

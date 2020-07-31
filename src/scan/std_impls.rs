@@ -77,7 +77,7 @@ where
 }
 unsafe impl<T: GcSafe> GcSafe for Cell<T> {}
 
-unsafe impl<T: Scan> Scan for RefCell<T> {
+unsafe impl<T: Scan + ?Sized> Scan for RefCell<T> {
     #[inline]
     fn scan(&self, scanner: &mut Scanner<'_>) {
         // It's an error if this fails
@@ -89,7 +89,7 @@ unsafe impl<T: Scan> Scan for RefCell<T> {
         }
     }
 }
-unsafe impl<T: GcSafe> GcSafe for RefCell<T> {}
+unsafe impl<T: GcSafe + ?Sized> GcSafe for RefCell<T> {}
 
 unsafe impl<T: Scan> Scan for Option<T> {
     #[inline]
@@ -101,7 +101,7 @@ unsafe impl<T: Scan> Scan for Option<T> {
 }
 unsafe impl<T: GcSafe> GcSafe for Option<T> {}
 
-unsafe impl<T: Scan> Scan for Mutex<T> {
+unsafe impl<T: Scan + ?Sized> Scan for Mutex<T> {
     #[inline]
     fn scan(&self, scanner: &mut Scanner<'_>) {
         match self.try_lock() {
@@ -120,9 +120,9 @@ unsafe impl<T: Scan> Scan for Mutex<T> {
         }
     }
 }
-unsafe impl<T: GcSafe> GcSafe for Mutex<T> {}
+unsafe impl<T: GcSafe + ?Sized> GcSafe for Mutex<T> {}
 
-unsafe impl<T: Scan> Scan for RwLock<T> {
+unsafe impl<T: Scan + ?Sized> Scan for RwLock<T> {
     #[inline]
     fn scan(&self, scanner: &mut Scanner<'_>) {
         match self.try_read() {
@@ -141,7 +141,7 @@ unsafe impl<T: Scan> Scan for RwLock<T> {
         }
     }
 }
-unsafe impl<T: GcSafe> GcSafe for RwLock<T> {}
+unsafe impl<T: GcSafe + ?Sized> GcSafe for RwLock<T> {}
 
 // Primitives do not hold any Gc<T>s
 impl EmptyScan for isize {}

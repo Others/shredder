@@ -235,7 +235,7 @@ impl Collector {
         self.track(gc_data_ptr, heap_ptr)
     }
 
-    fn track<T: Scan>(
+    fn track<T: Scan + ?Sized>(
         &self,
         gc_data_ptr: GcAllocation,
         heap_ptr: *const T,
