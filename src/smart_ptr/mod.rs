@@ -3,7 +3,8 @@ use std::cell::{BorrowError, BorrowMutError, RefCell};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
+use std::marker::Unsize;
+use std::ops::{CoerceUnsized, Deref};
 use std::sync;
 
 use stable_deref_trait::StableDeref;
@@ -107,6 +108,12 @@ impl<T: Scan + ?Sized> Clone for Gc<T> {
         }
     }
 }
+
+// Allow unsized Gc types to be coerced amongst each other if it's allowed
+impl<T, U> CoerceUnsized<Gc<U>> for Gc<T>
+    where T: Scan + ?Sized + Unsize<U>,
+          U: Scan + ?Sized
+{}
 
 // Same bounds as Arc<T>
 unsafe impl<T: Scan + ?Sized> Sync for Gc<T> where T: Sync + Send {}
@@ -410,5 +417,23 @@ impl<T: Scan + 'static> Gc<sync::RwLock<T>> {
     ) -> Result<GcRwLockWriteGuard<'_, T>, GcTryLockError<GcRwLockWriteGuard<'_, T>>> {
         let g = self.get();
         GcRwLockWriteGuard::try_write(g)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{Gc, Scan};
+    use std::{cell::RefCell, sync::{Mutex, RwLock}};
+
+    #[test]
+    fn dyn_gc_ptr() {
+        trait NoSize: Scan {
+            fn do_stuff(&self);
+        }
+
+        let _: Gc<dyn NoSize>;
+        let _: Gc<RefCell<dyn NoSize>>;
+        let _: Gc<Mutex<dyn NoSize>>;
+        let _: Gc<RwLock<dyn NoSize>>;
     }
 }
