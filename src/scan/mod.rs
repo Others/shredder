@@ -127,18 +127,10 @@ pub unsafe trait ToScan {
     fn to_scan(&self) -> &(dyn Scan + 'static);
 }
 
-/// Implements a base `to_scan` for the given type.
-///
-/// The implementation body of `to_scan` is `&*self`.
-#[macro_export]
-macro_rules! impl_to_scan_safe {
-    ( $t:ty ) => {
-        unsafe impl ToScan for $ty {
-            fn to_scan(&self) -> &(dyn Scan + 'static) {
-                &*self
-            }
-        }
-    };
+unsafe impl<T: Scan + Sized + 'static> ToScan for T {
+    fn to_scan(&self) -> &(dyn Scan + 'static) {
+        &*self
+    }
 }
 
 /// Scanner is a struct used to manage the scanning of data, sort of analogous to `Hasher`
