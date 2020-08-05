@@ -3,8 +3,11 @@ use std::cell::{BorrowError, BorrowMutError, RefCell};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+#[cfg(nightly)]
 use std::marker::Unsize;
-use std::ops::{CoerceUnsized, Deref};
+#[cfg(nightly)]
+use std::ops::CoerceUnsized;
+use std::ops::Deref;
 use std::sync;
 
 use stable_deref_trait::StableDeref;
@@ -125,6 +128,7 @@ impl<T: Scan + ?Sized> Clone for Gc<T> {
 }
 
 // Allow unsized Gc types to be coerced amongst each other if it's allowed
+#[cfg(nightly)]
 impl<T, U> CoerceUnsized<Gc<U>> for Gc<T>
     where T: Scan + ?Sized + Unsize<U>,
           U: Scan + ?Sized
