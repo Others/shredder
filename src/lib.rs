@@ -65,7 +65,7 @@ use std::sync::{Mutex, RwLock};
 use collector::COLLECTOR;
 
 pub use finalize::Finalize;
-pub use scan::{EmptyScan, GcSafe, GcSafeWrapper, RMut, Scan, Scanner, R};
+pub use scan::{EmptyScan, GcSafe, GcSafeWrapper, RMut, Scan, Scanner, R, ToScan};
 pub use smart_ptr::{Gc, GcGuard};
 
 // Re-export the Scan derive

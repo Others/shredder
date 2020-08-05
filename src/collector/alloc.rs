@@ -4,7 +4,7 @@ use std::panic::UnwindSafe;
 use std::ptr;
 
 use crate::collector::InternalGcRef;
-use crate::{Finalize, Scan, Scanner};
+use crate::{Finalize, Scan, Scanner, ToScan};
 
 /// Represents a piece of data allocated by shredder
 #[derive(Copy, Clone, Debug, Hash)]
@@ -19,6 +19,7 @@ pub enum DeallocationAction {
     DoNothing,
     RunDrop,
     RunFinalizer { finalize_ptr: *const dyn Finalize },
+    BoxDrop,
 }
 
 // We need this for the drop thread. By that point we have exclusive access to the data
@@ -62,6 +63,19 @@ impl GcAllocation {
             Self {
                 scan_ptr,
                 deallocation_action: DeallocationAction::RunFinalizer { finalize_ptr },
+            },
+            raw_ptr,
+        )
+    }
+
+    pub fn from_box<T: Scan + ToScan + ?Sized + 'static>(v: Box<T>) -> (Self, *const T) {
+        let scan_ptr: *const dyn Scan = v.to_scan();
+        let raw_ptr: *const T = Box::into_raw(v);
+
+        (
+            Self {
+                scan_ptr,
+                deallocation_action: DeallocationAction::BoxDrop,
             },
             raw_ptr,
         )
@@ -120,6 +134,15 @@ impl GcAllocation {
                 // And we know `finalize_ptr` ~= `scan_ptr`
                 // So we can run `finalize` here, right before deallocation
                 (&mut *(finalize_ptr as *mut dyn Finalize)).finalize();
+            }
+            DeallocationAction::BoxDrop => {
+                // Safe as long as only boxed values are created with BoxDrop deallocate action
+                // Additionally, this is the only instance where the pointer should be alive so
+                // we are not taking it mutably anywhere else. The death of a pointer in action,
+                // really makes you think...
+                let box_ptr = Box::from_raw(scan_ptr as *mut dyn Scan);
+                // drop like normal
+                drop(box_ptr);
             }
         }
 

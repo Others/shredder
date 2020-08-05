@@ -116,6 +116,29 @@ macro_rules! mark_send_type_gc_safe {
     };
 }
 
+/// A trait that allows something that is `Scan` to be converted to a `dyn` ref.
+///
+/// Implementing this trait is only necessary if you need to allocate an owned pointer to a DST,
+/// e.g. `Gc::from_box(Box<dyn MyTrait>)`
+///
+/// This is unsafe because `to_scan` must always be implemented as `&*self`
+pub unsafe trait ToScan {
+    /// Converts this value to a `dyn Scan` reference value.
+    fn to_scan(&self) -> &(dyn Scan + 'static);
+}
+
+/// Implements a base `to_scan` for the given type.
+///
+/// The implementation body of `to_scan` is `&*self`.
+#[macro_export]
+macro_rules! impl_to_scan_safe {
+    ( $t:ty ) => {
+        unsafe impl ToScan for $ty {
+            fn to_scan(&self) -> &(dyn Scan + 'static) { &*self }
+        }
+    }
+}
+
 /// Scanner is a struct used to manage the scanning of data, sort of analogous to `Hasher`
 /// Usually you will only care about this while implementing `Scan`
 pub struct Scanner<'a> {

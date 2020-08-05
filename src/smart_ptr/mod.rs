@@ -14,7 +14,7 @@ use crate::wrappers::{
     GcMutexGuard, GcPoisonError, GcRef, GcRefMut, GcRwLockReadGuard, GcRwLockWriteGuard,
     GcTryLockError,
 };
-use crate::{Finalize, Scan};
+use crate::{Finalize, Scan, ToScan};
 
 /// A smart-pointer for data tracked by `shredder` garbage collector
 pub struct Gc<T: Scan + ?Sized> {
@@ -72,6 +72,21 @@ impl<T: Scan + ?Sized> Gc<T> {
         T: Sized + Finalize,
     {
         let (handle, ptr) = COLLECTOR.track_with_finalization(v);
+        Self {
+            backing_handle: handle,
+            direct_ptr: ptr,
+        }
+    }
+
+    /// Create a new `Gc` using the given `Box<T>`.
+    ///
+    /// This function does not allocate anything - rather, it uses the `Box<T>` and releases its
+    /// memory appropriately. This is useful since it removes the requirement for types to be
+    /// sized.
+    pub fn from_box(v: Box<T>) -> Self
+        where T: ToScan + 'static
+    {
+        let (handle, ptr) = COLLECTOR.track_boxed_value(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
