@@ -134,9 +134,11 @@ pub unsafe trait ToScan {
 macro_rules! impl_to_scan_safe {
     ( $t:ty ) => {
         unsafe impl ToScan for $ty {
-            fn to_scan(&self) -> &(dyn Scan + 'static) { &*self }
+            fn to_scan(&self) -> &(dyn Scan + 'static) {
+                &*self
+            }
         }
-    }
+    };
 }
 
 /// Scanner is a struct used to manage the scanning of data, sort of analogous to `Hasher`

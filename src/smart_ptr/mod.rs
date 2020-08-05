@@ -52,7 +52,8 @@ impl<T: Scan + ?Sized> Gc<T> {
     /// When this data is garbage collected, its `drop` implementation will NOT be run.
     /// Be careful using this method! It can lead to memory leaks!
     pub fn new_no_drop(v: T) -> Self
-        where T: Sized
+    where
+        T: Sized,
     {
         let (handle, ptr) = COLLECTOR.track_with_no_drop(v);
         Self {
@@ -87,7 +88,8 @@ impl<T: Scan + ?Sized> Gc<T> {
     /// memory appropriately. This is useful since it removes the requirement for types to be
     /// sized.
     pub fn from_box(v: Box<T>) -> Self
-        where T: ToScan + 'static
+    where
+        T: ToScan + 'static,
     {
         let (handle, ptr) = COLLECTOR.track_boxed_value(v);
         Self {
@@ -130,9 +132,11 @@ impl<T: Scan + ?Sized> Clone for Gc<T> {
 // Allow unsized Gc types to be coerced amongst each other if it's allowed
 #[cfg(nightly)]
 impl<T, U> CoerceUnsized<Gc<U>> for Gc<T>
-    where T: Scan + ?Sized + Unsize<U>,
-          U: Scan + ?Sized
-{}
+where
+    T: Scan + ?Sized + Unsize<U>,
+    U: Scan + ?Sized,
+{
+}
 
 // Same bounds as Arc<T>
 unsafe impl<T: Scan + ?Sized> Sync for Gc<T> where T: Sync + Send {}
@@ -442,7 +446,10 @@ impl<T: Scan + 'static> Gc<sync::RwLock<T>> {
 #[cfg(test)]
 mod test {
     use crate::{Gc, Scan};
-    use std::{cell::RefCell, sync::{Mutex, RwLock}};
+    use std::{
+        cell::RefCell,
+        sync::{Mutex, RwLock},
+    };
 
     #[test]
     fn dyn_gc_ptr() {
