@@ -16,10 +16,10 @@ pub struct GcAllocation {
 /// What additional action should we run before deallocating?
 #[derive(Copy, Clone, Debug, Hash)]
 pub enum DeallocationAction {
+    BoxDrop,
     DoNothing,
     RunDrop,
     RunFinalizer { finalize_ptr: *const dyn Finalize },
-    BoxDrop,
 }
 
 // We need this for the drop thread. By that point we have exclusive access to the data
