@@ -162,6 +162,9 @@ impl EmptyScan for u64 {}
 impl EmptyScan for i128 {}
 impl EmptyScan for u128 {}
 
+impl EmptyScan for f32 {}
+impl EmptyScan for f64 {}
+
 // It's nice if other send types from std also get the scan treatment
 // These are value types that have no internal content needing a scan
 impl EmptyScan for String {}
