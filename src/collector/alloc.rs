@@ -146,9 +146,13 @@ impl GcAllocation {
             }
         }
 
-        let dealloc_layout = Layout::for_value(&*scan_ptr);
-        let heap_ptr = scan_ptr as *mut u8;
-        dealloc(heap_ptr, dealloc_layout);
+        // Only call dealloc() if we're not dealing with a boxed value, because the box gets
+        // dropped above.
+        if !matches!(self.deallocation_action, DeallocationAction::BoxDrop) {
+            let dealloc_layout = Layout::for_value(&*scan_ptr);
+            let heap_ptr = scan_ptr as *mut u8;
+            dealloc(heap_ptr, dealloc_layout);
+        }
     }
 
     pub fn scan<F: FnMut(InternalGcRef)>(&self, callback: F) {
