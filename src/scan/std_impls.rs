@@ -89,6 +89,7 @@ unsafe impl<T: Scan + ?Sized> Scan for RefCell<T> {
         }
     }
 }
+
 unsafe impl<T: GcSafe + ?Sized> GcSafe for RefCell<T> {}
 
 unsafe impl<T: Scan> Scan for Option<T> {
