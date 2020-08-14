@@ -131,7 +131,7 @@ impl<T: Scan + ?Sized> Clone for Gc<T> {
 #[cfg(feature = "nightly-features")]
 impl<T, U> CoerceUnsized<Gc<U>> for Gc<T>
 where
-    T: Scan + Unsize<U>,
+    T: Scan + ?Sized + Unsize<U>,
     U: Scan + ?Sized,
 {
 }
