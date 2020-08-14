@@ -3,12 +3,10 @@ use std::cell::{BorrowError, BorrowMutError, RefCell};
 use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-#[cfg(nightly)]
-use std::marker::Unsize;
-#[cfg(nightly)]
-use std::ops::CoerceUnsized;
 use std::ops::Deref;
 use std::sync;
+#[cfg(feature = "nightly-features")]
+use std::{ops::CoerceUnsized, marker::Unsize};
 
 use stable_deref_trait::StableDeref;
 
@@ -130,13 +128,14 @@ impl<T: Scan + ?Sized> Clone for Gc<T> {
 }
 
 // Allow unsized Gc types to be coerced amongst each other if it's allowed
-#[cfg(nightly)]
+#[cfg(feature = "nightly-features")]
 impl<T, U> CoerceUnsized<Gc<U>> for Gc<T>
 where
-    T: Scan + ?Sized + Unsize<U>,
+    T: Scan + Unsize<U>,
     U: Scan + ?Sized,
 {
 }
+
 
 // Same bounds as Arc<T>
 unsafe impl<T: Scan + ?Sized> Sync for Gc<T> where T: Sync + Send {}
