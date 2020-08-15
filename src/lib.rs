@@ -22,7 +22,8 @@
 //! - no no-std support: The collector requires threading and other `std` features (will fix!)
 
 // We love docs here
-#![deny(missing_docs)]
+// #![deny(missing_docs)]
+
 // Clippy configuration:
 // I'd like the most pedantic warning level
 #![warn(
@@ -49,6 +50,8 @@ extern crate log;
 #[macro_use]
 extern crate rental;
 
+/// Atomic gc operations
+pub mod atomic;
 mod collector;
 mod finalize;
 mod lockout;

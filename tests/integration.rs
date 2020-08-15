@@ -5,7 +5,9 @@ use std::sync::{self, Arc, Mutex};
 
 use once_cell::sync::Lazy;
 
+use shredder::atomic::AtomicGc;
 use shredder::*;
+use std::sync::atomic::Ordering;
 
 static TEST_MUTEX: Lazy<parking_lot::Mutex<()>> = Lazy::new(|| parking_lot::Mutex::new(()));
 
@@ -219,5 +221,26 @@ fn no_drop_functional() {
         });
     });
     assert_eq!(&*(tracker.lock().unwrap()), "none");
+    assert_eq!(number_of_tracked_allocations(), 0);
+}
+
+#[test]
+fn simple_atomic_cleanup() {
+    let _guard = TEST_MUTEX.lock();
+
+    let value = Gc::new(17);
+    let atomic = AtomicGc::new(&value);
+    drop(value);
+
+    let new_value = Gc::new(20);
+    atomic.store(&new_value, Ordering::Relaxed);
+    drop(new_value);
+
+    collect();
+    assert_eq!(number_of_tracked_allocations(), 1);
+
+    drop(atomic);
+
+    collect();
     assert_eq!(number_of_tracked_allocations(), 0);
 }

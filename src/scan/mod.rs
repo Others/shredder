@@ -8,6 +8,7 @@ use std::ops::{Deref, DerefMut};
 use crate::collector::InternalGcRef;
 use crate::Gc;
 
+use crate::atomic::AtomicGc;
 pub use helper::EmptyScan;
 pub use r::{RMut, R};
 
@@ -141,8 +142,8 @@ impl<'a> Scanner<'a> {
     #[doc(hidden)]
     pub fn check_gc_safe<T: GcSafe>(&self, _: &T) {}
 
-    fn add_internal_handle<T: Scan>(&mut self, gc: &Gc<T>) {
-        (self.scan_callback)(gc.internal_handle());
+    fn add_internal_handle(&mut self, gc_ref: InternalGcRef) {
+        (self.scan_callback)(gc_ref);
     }
 }
 
@@ -152,10 +153,19 @@ unsafe impl<T: Scan> Scan for Gc<T> {
     #[allow(clippy::inline_always)]
     #[inline(always)]
     fn scan(&self, scanner: &mut Scanner<'_>) {
-        scanner.add_internal_handle(self)
+        scanner.add_internal_handle(self.internal_handle());
     }
 }
 unsafe impl<T: Scan> GcSafe for Gc<T> {}
+
+// Another fundamental implementation
+unsafe impl<T: Scan> Scan for AtomicGc<T> {
+    fn scan(&self, scanner: &mut Scanner<'_>) {
+        scanner.add_internal_handle(self.internal_handle());
+    }
+}
+
+unsafe impl<T: Scan> GcSafe for AtomicGc<T> {}
 
 /// `GcSafeWrapper` wraps a `Send` datatype to make it `GcSafe`
 /// See the documentation of `Send` to see where this would be useful
