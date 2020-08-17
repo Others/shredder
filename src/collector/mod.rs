@@ -404,7 +404,7 @@ impl Collector {
     }
 
     #[inline]
-    pub fn get_atomic_guard_spinlock_inclusive(&self) -> APSInclusiveGuard<'_> {
+    pub fn get_collection_blocker_spinlock(&self) -> APSInclusiveGuard<'_> {
         loop {
             if let Some(inclusive_guard) = self.atomic_spinlock.lock_inclusive() {
                 return inclusive_guard;

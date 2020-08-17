@@ -15,17 +15,26 @@ use crate::{Gc, Scan};
 /// presence of an active garbage collection operation, all operations will block.
 #[derive(Clone, Debug)]
 pub struct AtomicGc<T: Scan> {
+    // It is only safe to read the data here if a collection is not happening
+    // Only safe to write a pointer gotten from `Arc::into_raw`
     atomic_ptr: Arc<AtomicPtr<GcData>>,
     backing_handle: InternalGcRef,
     _mark: PhantomData<Gc<T>>,
 }
 
 impl<T: Scan> AtomicGc<T> {
-    pub fn new(v: &Gc<T>) -> Self {
-        let _collection_blocker = COLLECTOR.get_atomic_guard_spinlock_inclusive();
+    /// Create a new `AtomicGc`
+    ///
+    /// The created `AtomicGc` will point to the same data as `data`
+    #[must_use]
+    pub fn new(data: &Gc<T>) -> Self {
+        // `data` is guaranteed to be pointing to the data we're about to contain, so we don't need to
+        // worry about data getting cleaned up (and therefore we don't need to block the collector)
 
-        let data = v.internal_handle_ref().data();
-        let data_ptr = Arc::into_raw(data);
+        // Carefully craft a ptr to store atomically
+        let data_arc = data.internal_handle_ref().data();
+        let data_ptr = Arc::into_raw(data_arc);
+
         let atomic_ptr = Arc::new(AtomicPtr::new(data_ptr as _));
 
         Self {
@@ -39,16 +48,22 @@ impl<T: Scan> AtomicGc<T> {
         self.backing_handle.clone()
     }
 
+    /// `load` the data from this `AtomicGc<T>`, getting back a `Gc<T>`
+    ///
+    /// The ordering/atomicity guarantees are identical to `AtomicPtr::load`
     #[must_use]
     pub fn load(&self, ordering: Ordering) -> Gc<T> {
         let ptr;
         let internal_handle;
         {
-            let _collection_blocker = COLLECTOR.get_atomic_guard_spinlock_inclusive();
-            let gc_data_ref = self.atomic_ptr.load(ordering);
+            let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
 
-            // Safe since we know the collector is blocked
+            // Safe to manipulate this ptr only because we have the `_collection_blocker`
+            let gc_data_ref = self.atomic_ptr.load(ordering);
             let gc_data_raw = unsafe { Arc::from_raw(gc_data_ref) };
+
+            // Create a new `Arc` pointing to the same data, but don't invalidate the existing `Arc`
+            // (which is effectively "behind" the pointer)
             let new_gc_data_ref = gc_data_raw.clone();
             mem::forget(gc_data_raw);
 
@@ -59,16 +74,28 @@ impl<T: Scan> AtomicGc<T> {
         Gc::new_raw(internal_handle, ptr)
     }
 
+    /// `store` new data into this `AtomicGc`
+    ///
+    /// The ordering/atomicity guarantees are identical to `AtomicPtr::swap`
     pub fn store(&self, v: &Gc<T>, ordering: Ordering) {
         let data = v.internal_handle_ref().data();
         let raw_data_ptr = Arc::into_raw(data);
 
         {
-            let _collection_blocker = COLLECTOR.get_atomic_guard_spinlock_inclusive();
-            self.atomic_ptr.store(raw_data_ptr as _, ordering);
+            let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
+
+            // Safe to manipulate this ptr only because we have the `_collection_blocker`
+            let old_ptr = self.atomic_ptr.swap(raw_data_ptr as _, ordering);
+
+            // Must cleanup old ptr
+            let old_arc = unsafe { Arc::from_raw(old_ptr) };
+            drop(old_arc);
         }
     }
 
+    /// `swap` what data is stored in this `AtomicGc`, getting a `Gc` to the old data back
+    ///
+    /// The ordering/atomicity guarantees are identical to `AtomicPtr::swap`
     #[must_use]
     pub fn swap(&self, v: &Gc<T>, ordering: Ordering) -> Gc<T> {
         let data = v.internal_handle_ref().data();
@@ -77,7 +104,7 @@ impl<T: Scan> AtomicGc<T> {
         let ptr;
         let internal_handle;
         {
-            let _collection_blocker = COLLECTOR.get_atomic_guard_spinlock_inclusive();
+            let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
             let old_data_ptr = self.atomic_ptr.swap(raw_data_ptr as _, ordering);
 
             // Safe since we know the collector is blocked
@@ -90,17 +117,31 @@ impl<T: Scan> AtomicGc<T> {
         Gc::new_raw(internal_handle, ptr)
     }
 
+    /// Do a CAS operation. If this `AtomicGc` points to the same data as `current` then after this
+    /// operation it will point to the same data as `new`. (And this happens atomically.)
+    ///
+    /// Data is compared for pointer equality. NOT `Eq` equality. (A swap will only happen if
+    /// `current` and this `AtomicGc` point to the same underlying allocation.)
+    ///
+    /// The ordering/atomicity guarantees are identical to `AtomicPtr::compare_and_swap`
+    ///
+    /// # Returns
+    /// Returns `true` if the swap happened and this `AtomicGc` now points to `new`
+    /// Returns `false` if the swap failed / this `AtomicGc` was not pointing to `current`
     #[allow(clippy::must_use_candidate)]
     pub fn compare_and_swap(&self, current: &Gc<T>, new: &Gc<T>, ordering: Ordering) -> bool {
+        // Turn guess data into a raw ptr
         let guess_data = current.internal_handle_ref().data();
         let guess_data_raw = Arc::as_ptr(&guess_data) as _;
 
+        // Turn new data into a raw ptr
         let new_data = new.internal_handle_ref().data();
         let new_data_raw = Arc::into_raw(new_data) as _;
 
         let compare_res;
         {
-            let _collection_blocker = COLLECTOR.get_atomic_guard_spinlock_inclusive();
+            let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
+            // Only safe since we have the `collection_blocker`
             compare_res = self
                 .atomic_ptr
                 .compare_and_swap(guess_data_raw, new_data_raw, ordering);
@@ -121,6 +162,18 @@ impl<T: Scan> AtomicGc<T> {
         }
     }
 
+    /// Do a CAE operation. If this `AtomicGc` points to the same data as `current` then after this
+    /// operation it will point to the same data as `new`. (And this happens atomically.)
+    ///
+    /// Data is compared for pointer equality. NOT `Eq` equality. (A swap will only happen if
+    /// `current` and this `AtomicGc` point to the same underlying allocation.)
+    ///
+    /// The ordering/atomicity guarantees are identical to `AtomicPtr::compare_exchange`, refer to
+    /// that documentation for documentation about `success` and `failure` orderings.
+    ///
+    /// # Returns
+    /// Returns `true` if the swap happened and this `AtomicGc` now points to `new`
+    /// Returns `false` if the swap failed / this `AtomicGc` was not pointing to `current`
     #[allow(clippy::must_use_candidate)]
     pub fn compare_exchange(
         &self,
@@ -137,7 +190,7 @@ impl<T: Scan> AtomicGc<T> {
 
         let compare_res;
         {
-            let _collection_blocker = COLLECTOR.get_atomic_guard_spinlock_inclusive();
+            let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
             compare_res =
                 self.atomic_ptr
                     .compare_exchange(guess_data_raw, new_data_raw, success, failure);
@@ -157,10 +210,16 @@ impl<T: Scan> AtomicGc<T> {
             false
         }
     }
+
+    // TODO: Compare and swap/compare and exchange that return the current value
 }
 
 impl<T: Scan> Drop for AtomicGc<T> {
     fn drop(&mut self) {
+        // Manually cleanup the backing handle...
         self.backing_handle.invalidate();
+        // Manually cleanup the `Arc` inside the `atomic_ptr`
+        let ptr = self.atomic_ptr.load(Ordering::Relaxed);
+        drop(unsafe { Arc::from_raw(ptr) });
     }
 }

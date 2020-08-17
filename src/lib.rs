@@ -22,8 +22,7 @@
 //! - no no-std support: The collector requires threading and other `std` features (will fix!)
 
 // We love docs here
-// #![deny(missing_docs)]
-
+#![deny(missing_docs)]
 // Clippy configuration:
 // I'd like the most pedantic warning level
 #![warn(

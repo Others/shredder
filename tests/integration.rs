@@ -1,13 +1,13 @@
 use std::cell::RefCell;
 use std::mem::drop;
 use std::ops::Deref;
+use std::sync::atomic::Ordering;
 use std::sync::{self, Arc, Mutex};
 
 use once_cell::sync::Lazy;
 
 use shredder::atomic::AtomicGc;
 use shredder::*;
-use std::sync::atomic::Ordering;
 
 static TEST_MUTEX: Lazy<parking_lot::Mutex<()>> = Lazy::new(|| parking_lot::Mutex::new(()));
 
@@ -228,19 +228,98 @@ fn no_drop_functional() {
 fn simple_atomic_cleanup() {
     let _guard = TEST_MUTEX.lock();
 
-    let value = Gc::new(17);
-    let atomic = AtomicGc::new(&value);
-    drop(value);
+    run_with_gc_cleanup(|| {
+        let value = Gc::new(17);
+        let atomic = AtomicGc::new(&value);
+        drop(value);
 
-    let new_value = Gc::new(20);
-    atomic.store(&new_value, Ordering::Relaxed);
-    drop(new_value);
+        let fr = atomic.load(Ordering::Relaxed);
+        assert_eq!(*fr.get(), 17);
+        drop(fr);
 
-    collect();
-    assert_eq!(number_of_tracked_allocations(), 1);
+        let new_value = Gc::new(20);
+        atomic.store(&new_value, Ordering::Relaxed);
+        drop(new_value);
 
-    drop(atomic);
+        let sr = atomic.load(Ordering::Relaxed);
+        assert_eq!(*sr.get(), 20);
+        drop(sr);
 
-    collect();
+        collect();
+        assert_eq!(number_of_tracked_allocations(), 1);
+    });
     assert_eq!(number_of_tracked_allocations(), 0);
+}
+
+#[test]
+fn atomic_cycle() {
+    let _guard = TEST_MUTEX.lock();
+    run_with_gc_cleanup(|| {
+        let a = Gc::new(sync::Mutex::new(Connection { connect: None }));
+
+        let b = Gc::new(sync::Mutex::new(Connection { connect: None }));
+
+        let a_atomic = AtomicGc::new(&a);
+        let b_atomic = AtomicGc::new(&b);
+        drop(a);
+        drop(b);
+
+        let a_read = a_atomic.load(Ordering::Relaxed);
+        let b_read = b_atomic.load(Ordering::Relaxed);
+
+        let mut a_guard = a_read.lock().unwrap();
+        let mut b_guard = b_read.lock().unwrap();
+
+        a_guard.connect = Some(b_read.clone());
+        b_guard.connect = Some(a_read.clone());
+    });
+
+    assert_eq!(number_of_tracked_allocations(), 0);
+}
+
+#[test]
+fn atomic_compare_and_swap_test() {
+    let _guard = TEST_MUTEX.lock();
+    run_with_gc_cleanup(|| {
+        let v1 = Gc::new(123);
+        let v2 = Gc::new(1776);
+        let v1_alt = Gc::new(123);
+
+        let atomic = AtomicGc::new(&v1);
+        assert_eq!(*atomic.load(Ordering::Relaxed).get(), 123);
+
+        let res = atomic.compare_and_swap(&v1, &v2, Ordering::Relaxed);
+        assert!(res);
+        assert_eq!(*atomic.load(Ordering::Relaxed).get(), 1776);
+
+        atomic.store(&v1, Ordering::Relaxed);
+        let res = atomic.compare_and_swap(&v1_alt, &v2, Ordering::Relaxed);
+        assert!(!res);
+        assert_eq!(*atomic.load(Ordering::Relaxed).get(), 123);
+    });
+    assert_eq!(number_of_tracked_allocations(), 0);
+}
+
+#[test]
+fn atomic_compare_and_exchange_test() {
+    let _guard = TEST_MUTEX.lock();
+    run_with_gc_cleanup(|| {
+        let v1 = Gc::new(123);
+        let v2 = Gc::new(1776);
+        let v1_alt = Gc::new(123);
+
+        let atomic = AtomicGc::new(&v1);
+        assert_eq!(*atomic.load(Ordering::Relaxed).get(), 123);
+
+        let res = atomic.compare_exchange(&v1, &v2, Ordering::Relaxed, Ordering::Relaxed);
+        assert!(res);
+        assert_eq!(*atomic.load(Ordering::Relaxed).get(), 1776);
+
+        atomic.store(&v1, Ordering::Relaxed);
+        let res = atomic.compare_exchange(&v1_alt, &v2, Ordering::Relaxed, Ordering::Relaxed);
+        assert!(!res);
+        assert_eq!(*atomic.load(Ordering::Relaxed).get(), 123);
+    });
+    assert_eq!(number_of_tracked_allocations(), 0);
+    assert_eq!(number_of_active_handles(), 0);
 }
