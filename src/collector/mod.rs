@@ -1,10 +1,11 @@
 mod alloc;
+mod atomic_protection;
 mod dropper;
 mod trigger;
 
 use std::cmp;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::spawn;
 
@@ -17,6 +18,7 @@ use parking_lot::{Mutex, MutexGuard};
 use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
 
 use crate::collector::alloc::GcAllocation;
+pub use crate::collector::atomic_protection::*;
 use crate::collector::dropper::{BackgroundDropper, DropMessage};
 use crate::collector::trigger::GcTrigger;
 use crate::lockout::{ExclusiveWarrant, Lockout, LockoutProvider, Warrant};
@@ -37,6 +39,14 @@ impl InternalGcRef {
     pub(crate) fn invalidate(&self) {
         COLLECTOR.drop_handle(self);
     }
+
+    pub(crate) fn data(&self) -> Arc<GcData> {
+        if let UnderlyingData::Fixed(data) = &self.handle_ref.underlying_data {
+            data.clone()
+        } else {
+            panic!("Only fixed data has a usable `data` method")
+        }
+    }
 }
 
 /// We don't want to expose what specific warrant provider we're using
@@ -52,6 +62,8 @@ pub struct Collector {
     monotonic_counter: AtomicU64,
     /// shredder only allows one collection to proceed at a time
     gc_lock: Mutex<()>,
+    /// this prevents atomic operations from happening during collection time
+    atomic_spinlock: AtomicProtectingSpinlock,
     /// trigger decides when we should run a collection
     trigger: GcTrigger,
     /// dropping happens in a background thread. This struct lets us communicate with that thread
@@ -78,7 +90,7 @@ struct TrackedData {
 
 /// Represents a piece of data tracked by the collector
 #[derive(Debug)]
-pub(crate) struct GcData {
+pub struct GcData {
     unique_id: u64,
     /// a wrapper to manage (ie deallocate) the underlying allocation
     underlying_allocation: GcAllocation,
@@ -89,6 +101,12 @@ pub(crate) struct GcData {
     // During what collection was this last marked?
     //     0 if this is a new piece of data
     last_marked: AtomicU64,
+}
+
+impl GcData {
+    pub(crate) fn scan_ptr(&self) -> *const dyn Scan {
+        self.underlying_allocation.scan_ptr
+    }
 }
 
 impl LockoutProvider for Arc<GcData> {
@@ -128,10 +146,30 @@ impl PartialOrd for GcData {
 pub(crate) struct GcHandle {
     unique_id: u64,
     /// what data is backing this handle
-    underlying_data: Arc<GcData>,
+    underlying_data: UnderlyingData,
     // During what collection was this last found in a piece of GcData?
     //     0 if this is a new piece of data
     last_non_rooted: AtomicU64,
+}
+
+#[derive(Debug)]
+pub enum UnderlyingData {
+    Fixed(Arc<GcData>),
+    DynamicForAtomic(Arc<AtomicPtr<GcData>>),
+}
+
+impl UnderlyingData {
+    // Safe only if called with an APS Exclusive guard
+    #[inline]
+    unsafe fn with_data<F: FnOnce(&GcData)>(&self, f: F) {
+        match self {
+            UnderlyingData::Fixed(data) => f(&*data),
+            UnderlyingData::DynamicForAtomic(ptr) => {
+                let arc_ptr = ptr.load(Ordering::Relaxed);
+                f(&*arc_ptr)
+            }
+        }
+    }
 }
 
 impl Hash for GcHandle {
@@ -169,6 +207,7 @@ impl Collector {
         let res = Arc::new(Self {
             monotonic_counter: AtomicU64::new(1),
             gc_lock: Mutex::default(),
+            atomic_spinlock: AtomicProtectingSpinlock::default(),
             trigger: GcTrigger::default(),
             dropper: BackgroundDropper::new(),
             async_gc_notifier,
@@ -250,7 +289,7 @@ impl Collector {
 
         let new_handle = Arc::new(GcHandle {
             unique_id: self.get_unique_id(),
-            underlying_data: new_data.clone(),
+            underlying_data: UnderlyingData::Fixed(new_data.clone()),
             last_non_rooted: AtomicU64::new(0),
         });
 
@@ -280,7 +319,35 @@ impl Collector {
     pub fn clone_handle(&self, handle: &InternalGcRef) -> InternalGcRef {
         let new_handle = Arc::new(GcHandle {
             unique_id: self.get_unique_id(),
-            underlying_data: handle.handle_ref.underlying_data.clone(),
+            underlying_data: UnderlyingData::Fixed(handle.data()),
+            last_non_rooted: AtomicU64::new(0),
+        });
+
+        self.tracked_data.handles.insert(new_handle.clone(), ());
+
+        InternalGcRef {
+            handle_ref: new_handle,
+        }
+    }
+
+    pub fn handle_from_data(&self, underlying_data: Arc<GcData>) -> InternalGcRef {
+        let new_handle = Arc::new(GcHandle {
+            unique_id: self.get_unique_id(),
+            underlying_data: UnderlyingData::Fixed(underlying_data),
+            last_non_rooted: AtomicU64::new(0),
+        });
+
+        self.tracked_data.handles.insert(new_handle.clone(), ());
+
+        InternalGcRef {
+            handle_ref: new_handle,
+        }
+    }
+
+    pub fn new_handle_for_atomic(&self, atomic_ptr: Arc<AtomicPtr<GcData>>) -> InternalGcRef {
+        let new_handle = Arc::new(GcHandle {
+            unique_id: self.get_unique_id(),
+            underlying_data: UnderlyingData::DynamicForAtomic(atomic_ptr),
             last_non_rooted: AtomicU64::new(0),
         });
 
@@ -295,17 +362,18 @@ impl Collector {
     pub fn get_data_warrant(&self, handle: &InternalGcRef) -> GcGuardWarrant {
         // This check is only necessary in the destructors
         // The destructor thread will always set the `deallocated` flag before deallocating data
-        let data_deallocated = handle
-            .handle_ref
-            .underlying_data
-            .deallocated
-            .load(Ordering::SeqCst);
-        if data_deallocated {
-            panic!("Tried to access into a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
-        }
+        if let UnderlyingData::Fixed(fixed) = &handle.handle_ref.underlying_data {
+            let data_deallocated = fixed.deallocated.load(Ordering::SeqCst);
 
-        GcGuardWarrant {
-            _warrant: Lockout::get_warrant(handle.handle_ref.underlying_data.clone()),
+            if data_deallocated {
+                panic!("Tried to access into a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
+            }
+
+            GcGuardWarrant {
+                _warrant: Lockout::get_warrant(fixed.clone()),
+            }
+        } else {
+            panic!("Cannot get data warrant for atomic data!")
         }
     }
 
@@ -333,6 +401,18 @@ impl Collector {
                 .expect("drop thread should be infallible!");
         }
         receiver.recv().expect("drop thread should be infallible!");
+    }
+
+    #[inline]
+    pub fn get_collection_blocker_spinlock(&self) -> APSInclusiveGuard<'_> {
+        loop {
+            if let Some(inclusive_guard) = self.atomic_spinlock.lock_inclusive() {
+                return inclusive_guard;
+            }
+            // block on the collector if we can't get the APS guard
+            let collector_block = self.gc_lock.lock();
+            drop(collector_block);
+        }
     }
 
     pub fn check_then_collect(&self) -> bool {
@@ -369,6 +449,7 @@ impl Collector {
         // - Deleted handles cannot make the graph "more connected" if the deletion was not observed
 
         trace!("Beginning collection");
+        let _atomic_spinlock_guard = self.atomic_spinlock.lock_exclusive();
 
         let current_collection = self
             .tracked_data
@@ -434,35 +515,41 @@ impl Collector {
         // This step is dfs through the object graph (starting with the roots)
         // We mark each object we find
         let dfs_stack = DynQueue::new(roots);
-        dfs_stack.into_par_iter().for_each(|(queue, handle)| {
-            let data = &handle.underlying_data;
+        dfs_stack
+            .into_par_iter()
+            .for_each(|(queue, handle)| unsafe {
+                handle.underlying_data.with_data(|data| {
+                    // If this data is new, we don't want to `Scan` it, since we may not have its Lockout
+                    // Any handles inside this could not of been seen in step 1, so they'll be rooted anyway
+                    if data.last_marked.load(Ordering::SeqCst) != 0 {
+                        // Essential note! All non-new non-warranted data is automatically marked
+                        // Thus we will never accidentally scan non-warranted data here
+                        let previous_mark =
+                            data.last_marked.swap(current_collection, Ordering::SeqCst);
 
-            // If this data is new, we don't want to `Scan` it, since we may not have its Lockout
-            // Any handles inside this could not of been seen in step 1, so they'll be rooted anyway
-            if data.last_marked.load(Ordering::SeqCst) != 0 {
-                // Essential note! All non-new non-warranted data is automatically marked
-                // Thus we will never accidentally scan non-warranted data here
-                let previous_mark = data.last_marked.swap(current_collection, Ordering::SeqCst);
+                        // Since we've done an atomic swap, we know we've already scanned this iff it was marked
+                        // (excluding data marked because we couldn't get its warrant, who's handles would be seen as roots)
+                        // This stops us for scanning data more than once and, crucially, concurrently scanning the same data
+                        if previous_mark != current_collection {
+                            data.last_marked.store(current_collection, Ordering::SeqCst);
 
-                // Since we've done an atomic swap, we know we've already scanned this iff it was marked
-                // (excluding data marked because we couldn't get its warrant, who's handles would be seen as roots)
-                // This stops us for scanning data more than once and, crucially, concurrently scanning the same data
-                if previous_mark != current_collection {
-                    data.last_marked.store(current_collection, Ordering::SeqCst);
-
-                    data.underlying_allocation.scan(|h| {
-                        if h.handle_ref
-                            .underlying_data
-                            .last_marked
-                            .load(Ordering::SeqCst)
-                            != current_collection
-                        {
-                            queue.enqueue(h.handle_ref);
+                            data.underlying_allocation.scan(|h| {
+                                let mut should_enque = false;
+                                h.handle_ref.underlying_data.with_data(|scanned_data| {
+                                    if scanned_data.last_marked.load(Ordering::SeqCst)
+                                        != current_collection
+                                    {
+                                        should_enque = true;
+                                    }
+                                });
+                                if should_enque {
+                                    queue.enqueue(h.handle_ref);
+                                }
+                            });
                         }
-                    });
-                }
-            }
-        });
+                    }
+                })
+            });
         // We're done scanning things, and have established what is marked. Release the warrants
         drop(warrants);
 
@@ -540,13 +627,13 @@ pub(crate) fn get_mock_handle() -> InternalGcRef {
     // Note: Here we assume a random u64 is unique. That's hacky, but is fine for testing :)
     InternalGcRef::new(Arc::new(GcHandle {
         unique_id: rand::random(),
-        underlying_data: Arc::new(GcData {
+        underlying_data: UnderlyingData::Fixed(Arc::new(GcData {
             unique_id: rand::random(),
             underlying_allocation: unsafe { GcAllocation::raw(Box::into_raw(mock_scannable)) },
             lockout: Lockout::new(),
             deallocated: AtomicBool::new(false),
             last_marked: AtomicU64::new(0),
-        }),
+        })),
         last_non_rooted: AtomicU64::new(0),
     }))
 }
