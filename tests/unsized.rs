@@ -62,24 +62,30 @@ impl Node for StringNode {
     }
 }
 
+macro_rules! make_node {
+    ($node:expr) => {{
+        Gc::from_box(Box::new($node))
+    }};
+}
+
 #[test]
 fn from_box() {
     run_with_gc_cleanup(|| {
         assert_eq!(number_of_tracked_allocations(), 0);
 
-        let num1: Gc<dyn Node> = Gc::from_box(Box::new(NumberNode(10)));
-        let num2: Gc<dyn Node> = Gc::from_box(Box::new(NumberNode(100)));
-        let num3: Gc<dyn Node> = Gc::from_box(Box::new(NumberNode(1000)));
-        let str1: Gc<dyn Node> = Gc::from_box(Box::new(StringNode("this is a string".to_string())));
-        let str2: Gc<dyn Node> = Gc::from_box(Box::new(StringNode("this is a longer string".to_string())));
-        let str3: Gc<dyn Node> = Gc::from_box(Box::new(StringNode("this is the longest string".to_string())));
+        let num1: Gc<dyn Node> = make_node!(NumberNode(10));
+        let num2: Gc<dyn Node> = make_node!(NumberNode(100));
+        let num3: Gc<dyn Node> = make_node!(NumberNode(1000));
+        let str1: Gc<dyn Node> = make_node!(StringNode("this is a string".to_string()));
+        let str2: Gc<dyn Node> = make_node!(StringNode("this is a longer string".to_string()));
+        let str3: Gc<dyn Node> = make_node!(StringNode("this is the longest string".to_string()));
 
         assert_eq!(number_of_tracked_allocations(), 6);
 
         {
-            let str_root: Gc<dyn Node> = Gc::from_box(Box::new(TreeNode(str1.clone(), str2.clone())));
-            let num_root: Gc<dyn Node> = Gc::from_box(Box::new(TreeNode(num1.clone(), num2.clone())));
-            let root: Gc<dyn Node> = Gc::from_box(Box::new(TreeNode(str_root, num_root)));
+            let str_root: Gc<dyn Node> = make_node!(TreeNode(str1.clone(), str2.clone()));
+            let num_root: Gc<dyn Node> = make_node!(TreeNode(num1.clone(), num2.clone()));
+            let root: Gc<dyn Node> = make_node!(TreeNode(str_root, num_root));
 
             assert_eq!(number_of_tracked_allocations(), 9);
 
@@ -91,12 +97,12 @@ fn from_box() {
         assert_eq!(number_of_tracked_allocations(), 6);
 
         {
-            let mixed_root1: Gc<dyn Node> = Gc::from_box(Box::new(TreeNode(str1.clone(), num1.clone())));
-            let mixed_root2: Gc<dyn Node> = Gc::from_box(Box::new(TreeNode(str2.clone(), num2.clone())));
-            let mixed_root3: Gc<dyn Node> = Gc::from_box(Box::new(TreeNode(str3.clone(), num3.clone())));
+            let mixed_root1: Gc<dyn Node> = make_node!(TreeNode(str1.clone(), num1.clone()));
+            let mixed_root2: Gc<dyn Node> = make_node!(TreeNode(str2.clone(), num2.clone()));
+            let mixed_root3: Gc<dyn Node> = make_node!(TreeNode(str3.clone(), num3.clone()));
 
-            let mid_root: Gc<dyn Node> = Gc::from_box(Box::new(TreeNode(mixed_root1, mixed_root2)));
-            let root: Gc<dyn Node> = Gc::from_box(Box::new(TreeNode(mixed_root3, mid_root)));
+            let mid_root: Gc<dyn Node> = make_node!(TreeNode(mixed_root1, mixed_root2));
+            let root: Gc<dyn Node> = make_node!(TreeNode(mixed_root3, mid_root));
 
             assert_eq!(number_of_tracked_allocations(), 11);
 
