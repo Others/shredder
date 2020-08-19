@@ -96,6 +96,13 @@ impl<T: Scan + ?Sized> Gc<T> {
         }
     }
 
+    pub(crate) fn new_raw(backing_handle: InternalGcRef, direct_ptr: *const T) -> Self {
+        Self {
+            backing_handle,
+            direct_ptr,
+        }
+    }
+
     /// `get` lets you get a `GcGuard`, which will deref to the underlying data.
     ///
     /// `get` is used to get a `GcGuard`. This is usually what you want when accessing non-`Sync`
@@ -112,6 +119,10 @@ impl<T: Scan + ?Sized> Gc<T> {
 
     pub(crate) fn internal_handle(&self) -> InternalGcRef {
         self.backing_handle.clone()
+    }
+
+    pub(crate) fn internal_handle_ref(&self) -> &InternalGcRef {
+        &self.backing_handle
     }
 }
 

@@ -50,6 +50,8 @@ extern crate log;
 #[macro_use]
 extern crate rental;
 
+/// Atomic gc operations
+pub mod atomic;
 mod collector;
 mod finalize;
 mod lockout;

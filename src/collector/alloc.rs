@@ -9,7 +9,7 @@ use crate::{Finalize, Scan, Scanner, ToScan};
 /// Represents a piece of data allocated by shredder
 #[derive(Copy, Clone, Debug, Hash)]
 pub struct GcAllocation {
-    scan_ptr: *const dyn Scan,
+    pub(crate) scan_ptr: *const dyn Scan,
     deallocation_action: DeallocationAction,
 }
 
