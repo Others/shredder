@@ -1,10 +1,7 @@
 #![cfg(feature = "nightly-features")]
 
-use std::{cell::RefCell, mem};
+use std::cell::RefCell;
 use shredder::*;
-use once_cell::sync::Lazy;
-
-static TEST_MUTEX: Lazy<parking_lot::Mutex<()>> = Lazy::new(|| parking_lot::Mutex::new(()));
 
 type GcNode = Gc<RefCell<dyn LinkedListNode + 'static>>;
 
@@ -83,7 +80,6 @@ make_node!(BlackNode, "black");
 
 #[test]
 fn coerce_nodes() {
-    let _guard = TEST_MUTEX.lock();
     run_with_gc_cleanup(|| {
         assert_eq!(number_of_tracked_allocations(), 0);
 
