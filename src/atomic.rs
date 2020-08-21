@@ -11,8 +11,12 @@ use crate::{Gc, Scan};
 /// This has more overhead than an `AtomicPtr`, but cleanly handles memory management. It also is
 /// similar to `Gc<T>` in that it can be cloned, and therefore easily shared.
 ///
+/// A good analogy would be to the excellent `arc-swap` crate. However, we can be more performant,
+/// as relying on the collector lets us avoid some synchronization.
+///
 /// `AtomicGc` should be fairly fast, but you may not assume it does not block. In fact in the
-/// presence of an active garbage collection operation, all operations will block.
+/// presence of an active garbage collection operation, all operations will block. Otherwise
+/// it shouldn't block.
 #[derive(Clone, Debug)]
 pub struct AtomicGc<T: Scan> {
     // It is only safe to read the data here if a collection is not happening

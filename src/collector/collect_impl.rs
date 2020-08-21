@@ -1,19 +1,14 @@
-use std::hash::Hash;
 use std::sync::atomic::Ordering;
 
 use crossbeam::queue::SegQueue;
-use dashmap::DashMap;
 use dynqueue::DynQueue;
 use parking_lot::MutexGuard;
-use rayon::iter::{IntoParallelIterator, ParallelBridge, ParallelIterator};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::collector::dropper::DropMessage;
 use crate::collector::{Collector, GcExclusiveWarrant};
 use crate::concurrency::lockout::Lockout;
 
-// TODO(issue): https://github.com/Others/shredder/issues/13
-// TODO: Remove the vectors we allocate here with an intrusive linked list
-// TODO: Optimize memory overhead
 impl Collector {
     pub(super) fn do_collect(&self, gc_guard: MutexGuard<'_, ()>) {
         // Be careful modifying this method. The tracked data and tracked handles can change underneath us
@@ -44,9 +39,7 @@ impl Collector {
         // eprintln!("tracked handles {:?}", tracked_handles);
 
         // In this step we calculate what's not rooted by marking all data definitively in a Gc
-        self.tracked_data.data.iter().par_bridge().for_each(|ele| {
-            let data = ele.key();
-
+        self.tracked_data.data.par_iter(|data| {
             // If data.last_marked == 0, then it is new data. Update that we've seen this data
             // (this step helps synchronize what data is valid to be deallocated)
             if data.last_marked.load(Ordering::SeqCst) == 0 {
@@ -61,6 +54,7 @@ impl Collector {
                 // Now figure out what handles are not rooted
                 data.underlying_allocation.scan(|h| {
                     h.handle_ref
+                        .v
                         .last_non_rooted
                         .store(current_collection, Ordering::SeqCst);
                 });
@@ -73,17 +67,12 @@ impl Collector {
 
         // The handles that were not just marked need to be treated as roots
         let roots = SegQueue::new();
-        self.tracked_data
-            .handles
-            .iter()
-            .par_bridge()
-            .for_each(|ele| {
-                let handle = ele.key();
-                // If the `last_non_rooted` number was not now, then it is a root
-                if handle.last_non_rooted.load(Ordering::SeqCst) != current_collection {
-                    roots.push(handle.clone());
-                }
-            });
+        self.tracked_data.handles.par_iter(|handle| {
+            // If the `last_non_rooted` number was not now, then it is a root
+            if handle.last_non_rooted.load(Ordering::SeqCst) != current_collection {
+                roots.push(handle);
+            }
+        });
 
         // eprintln!("roots {:?}", roots);
 
@@ -110,7 +99,7 @@ impl Collector {
 
                             data.underlying_allocation.scan(|h| {
                                 let mut should_enque = false;
-                                h.handle_ref.underlying_data.with_data(|scanned_data| {
+                                h.handle_ref.v.underlying_data.with_data(|scanned_data| {
                                     if scanned_data.last_marked.load(Ordering::SeqCst)
                                         != current_collection
                                     {
@@ -118,7 +107,7 @@ impl Collector {
                                     }
                                 });
                                 if should_enque {
-                                    queue.enqueue(h.handle_ref);
+                                    queue.enqueue(h.handle_ref.v);
                                 }
                             });
                         }
@@ -129,7 +118,7 @@ impl Collector {
         drop(warrants);
 
         // Now cleanup by removing all the data that is done for
-        par_retain(&self.tracked_data.data, |data, _| {
+        self.tracked_data.data.par_retain(|data| {
             // Mark the new data as in use for now
             // This stops us deallocating data that was allocated during collection
             if data.last_marked.load(Ordering::SeqCst) == 0 {
@@ -170,17 +159,4 @@ impl Collector {
 
         trace!("Collection finished");
     }
-}
-
-// Helper function! Lives here because it has nowhere else to go ;-;
-fn par_retain<K, V, F: Fn(&K, &V) -> bool>(map: &DashMap<K, V>, retain_fn: F)
-where
-    K: Eq + Hash + Send + Sync,
-    V: Send + Sync,
-    F: Send + Sync,
-{
-    map.shards()
-        .iter()
-        .par_bridge()
-        .for_each(|s| s.write().retain(|k, v| retain_fn(k, v.get())));
 }
