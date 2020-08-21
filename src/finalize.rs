@@ -29,7 +29,7 @@ pub unsafe trait Finalize {
     unsafe fn finalize(&mut self);
 }
 
-unsafe impl<T: Scan> Finalize for Gc<T> {
+unsafe impl<T: Scan + ?Sized> Finalize for Gc<T> {
     unsafe fn finalize(&mut self) {
         self.internal_handle().invalidate();
     }

@@ -33,3 +33,7 @@ trybuild = "1.0"
 
 #[profile.release]
 #debug = true
+
+[features]
+default = []
+nightly-features = []

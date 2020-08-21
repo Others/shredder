@@ -21,6 +21,7 @@
 //! - further parallelization: The collector needs to be optimized and parallelized further (will fix!)
 //! - no no-std support: The collector requires threading and other `std` features (will fix!)
 
+#![cfg_attr(feature = "nightly-features", feature(unsize, coerce_unsized))]
 // We love docs here
 #![deny(missing_docs)]
 // Clippy configuration:
@@ -65,7 +66,7 @@ use std::sync::{Mutex, RwLock};
 use collector::COLLECTOR;
 
 pub use finalize::Finalize;
-pub use scan::{EmptyScan, GcSafe, GcSafeWrapper, RMut, Scan, Scanner, R};
+pub use scan::{EmptyScan, GcSafe, GcSafeWrapper, RMut, Scan, Scanner, ToScan, R};
 pub use smart_ptr::{Gc, GcGuard};
 
 // Re-export the Scan derive

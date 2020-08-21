@@ -117,6 +117,23 @@ macro_rules! mark_send_type_gc_safe {
     };
 }
 
+/// A trait that allows something that is `Scan` to be converted to a `dyn` ref.
+///
+/// Implementing this trait is only necessary if you need to allocate an owned pointer to a DST,
+/// e.g. `Gc::from_box(Box<dyn MyTrait>)`
+///
+/// This is unsafe because `to_scan` must always be implemented as `&*self`
+pub unsafe trait ToScan {
+    /// Converts this value to a `dyn Scan` reference value.
+    fn to_scan(&self) -> &(dyn Scan + 'static);
+}
+
+unsafe impl<T: Scan + Sized + 'static> ToScan for T {
+    fn to_scan(&self) -> &(dyn Scan + 'static) {
+        &*self
+    }
+}
+
 /// Scanner is a struct used to manage the scanning of data, sort of analogous to `Hasher`
 /// Usually you will only care about this while implementing `Scan`
 pub struct Scanner<'a> {
@@ -133,7 +150,7 @@ impl<'a> Scanner<'a> {
     }
 
     /// Scan a piece of data, tracking any `Gc`s found
-    pub fn scan<T: Scan>(&mut self, from: &T) {
+    pub fn scan<T: Scan + ?Sized>(&mut self, from: &T) {
         from.scan(self);
     }
 
@@ -149,14 +166,14 @@ impl<'a> Scanner<'a> {
 
 // This is a fundamental implementation, since it's how GcInternalHandles make it into the Scanner
 // Safety: The implementation is built around this, so it's by definition safe
-unsafe impl<T: Scan> Scan for Gc<T> {
+unsafe impl<T: Scan + ?Sized> Scan for Gc<T> {
     #[allow(clippy::inline_always)]
     #[inline(always)]
     fn scan(&self, scanner: &mut Scanner<'_>) {
         scanner.add_internal_handle(self.internal_handle());
     }
 }
-unsafe impl<T: Scan> GcSafe for Gc<T> {}
+unsafe impl<T: Scan + ?Sized> GcSafe for Gc<T> {}
 
 // Another fundamental implementation
 unsafe impl<T: Scan> Scan for AtomicGc<T> {

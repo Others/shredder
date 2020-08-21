@@ -22,7 +22,7 @@ pub use crate::collector::atomic_protection::*;
 use crate::collector::dropper::{BackgroundDropper, DropMessage};
 use crate::collector::trigger::GcTrigger;
 use crate::lockout::{ExclusiveWarrant, Lockout, LockoutProvider, Warrant};
-use crate::{Finalize, Scan};
+use crate::{Finalize, Scan, ToScan};
 
 /// Intermediate struct. `Gc<T>` holds a `InternalGcRef`, which references a `GcHandle`
 /// There should be one `GcHandle` per `Gc<T>`
@@ -274,7 +274,15 @@ impl Collector {
         self.track(gc_data_ptr, heap_ptr)
     }
 
-    fn track<T: Scan>(
+    pub fn track_boxed_value<T: Scan + ToScan + ?Sized + 'static>(
+        &self,
+        data: Box<T>,
+    ) -> (InternalGcRef, *const T) {
+        let (gc_data_ptr, heap_ptr) = GcAllocation::from_box(data);
+        self.track(gc_data_ptr, heap_ptr)
+    }
+
+    fn track<T: Scan + ?Sized>(
         &self,
         gc_data_ptr: GcAllocation,
         heap_ptr: *const T,
