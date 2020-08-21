@@ -90,7 +90,10 @@ fn from_box() {
             assert_eq!(number_of_tracked_allocations(), 9);
 
             assert_eq!(root.get().max_number().unwrap(), 100);
-            assert_eq!(root.get().longest_string().unwrap(), "this is a longer string");
+            assert_eq!(
+                root.get().longest_string().unwrap(),
+                "this is a longer string"
+            );
         }
 
         collect();
@@ -107,7 +110,10 @@ fn from_box() {
             assert_eq!(number_of_tracked_allocations(), 11);
 
             assert_eq!(root.get().max_number().unwrap(), 1000);
-            assert_eq!(root.get().longest_string().unwrap(), "this is the longest string");
+            assert_eq!(
+                root.get().longest_string().unwrap(),
+                "this is the longest string"
+            );
         }
 
         collect();

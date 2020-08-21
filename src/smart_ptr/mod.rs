@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync;
 #[cfg(feature = "nightly-features")]
-use std::{ops::CoerceUnsized, marker::Unsize};
+use std::{marker::Unsize, ops::CoerceUnsized};
 
 use stable_deref_trait::StableDeref;
 
@@ -146,7 +146,6 @@ where
     U: Scan + ?Sized,
 {
 }
-
 
 // Same bounds as Arc<T>
 unsafe impl<T: Scan + ?Sized> Sync for Gc<T> where T: Sync + Send {}

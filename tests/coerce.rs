@@ -1,7 +1,7 @@
 #![cfg(feature = "nightly-features")]
 
-use std::cell::RefCell;
 use shredder::*;
+use std::cell::RefCell;
 
 type GcNode = Gc<RefCell<dyn LinkedListNode + 'static>>;
 
@@ -12,10 +12,8 @@ struct LinkedListBuilder {
 
 impl LinkedListBuilder {
     fn new(head: GcNode) -> Self {
-        let tail = head.get()
-            .borrow()
-            .tail();
-        Self { head, tail, }
+        let tail = head.get().borrow().tail();
+        Self { head, tail }
     }
 
     fn next<T: LinkedListNode + 'static>(mut self, next: T) -> Self {
@@ -47,10 +45,12 @@ trait LinkedListNode: Scan {
 
     fn tail(&self) -> Option<GcNode> {
         match self.next() {
-            Some(next) => if next.get().borrow().next().is_some() {
-                next.get().borrow().tail()
-            } else {
-                self.next()
+            Some(next) => {
+                if next.get().borrow().next().is_some() {
+                    next.get().borrow().tail()
+                } else {
+                    self.next()
+                }
             }
             None => None,
         }
@@ -59,16 +59,21 @@ trait LinkedListNode: Scan {
 
 macro_rules! make_node {
     ($name:ident, $label:expr) => {
-
         #[derive(Default, Debug, Scan)]
         struct $name {
-            next: Option<GcNode>
+            next: Option<GcNode>,
         }
 
         impl LinkedListNode for $name {
-            fn label(&self) -> &str { $label }
-            fn next(&self) -> Option<GcNode> { self.next.clone() }
-            fn set_next(&mut self, next: Option<GcNode>) { self.next = next; }
+            fn label(&self) -> &str {
+                $label
+            }
+            fn next(&self) -> Option<GcNode> {
+                self.next.clone()
+            }
+            fn set_next(&mut self, next: Option<GcNode>) {
+                self.next = next;
+            }
         }
     };
 }
@@ -102,7 +107,7 @@ fn coerce_nodes() {
         let mut node = Some(head.clone());
 
         const EXPECTED: &[&str] = &[
-            "blue", "red", "blue", "green", "black", "black", "green", "blue", "red", "blue"
+            "blue", "red", "blue", "green", "black", "black", "green", "blue", "red", "blue",
         ];
         let mut i = 0;
 
