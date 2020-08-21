@@ -21,6 +21,7 @@
 //! - further parallelization: The collector needs to be optimized and parallelized further (will fix!)
 //! - no no-std support: The collector requires threading and other `std` features (will fix!)
 
+#![cfg_attr(feature = "nightly-features", feature(unsize, coerce_unsized))]
 // We love docs here
 #![deny(missing_docs)]
 // Clippy configuration:
@@ -68,7 +69,7 @@ use crate::collector::COLLECTOR;
 pub use shredder_derive::Scan;
 
 pub use crate::finalize::Finalize;
-pub use crate::scan::{EmptyScan, GcSafe, GcSafeWrapper, RMut, Scan, Scanner, R};
+pub use crate::scan::{EmptyScan, GcSafe, GcSafeWrapper, RMut, Scan, Scanner, ToScan, R};
 pub use crate::smart_ptr::{Gc, GcGuard};
 
 /// A convenient alias for `Gc<RefCell<T>>`.

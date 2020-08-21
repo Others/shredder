@@ -4,7 +4,7 @@ use std::panic::UnwindSafe;
 use std::ptr;
 
 use crate::collector::InternalGcRef;
-use crate::{Finalize, Scan, Scanner};
+use crate::{Finalize, Scan, Scanner, ToScan};
 
 /// Represents a piece of data allocated by shredder
 #[derive(Copy, Clone, Debug, Hash)]
@@ -16,6 +16,7 @@ pub struct GcAllocation {
 /// What additional action should we run before deallocating?
 #[derive(Copy, Clone, Debug, Hash)]
 pub enum DeallocationAction {
+    BoxDrop,
     DoNothing,
     RunDrop,
     RunFinalizer { finalize_ptr: *const dyn Finalize },
@@ -62,6 +63,19 @@ impl GcAllocation {
             Self {
                 scan_ptr,
                 deallocation_action: DeallocationAction::RunFinalizer { finalize_ptr },
+            },
+            raw_ptr,
+        )
+    }
+
+    pub fn from_box<T: Scan + ToScan + ?Sized + 'static>(v: Box<T>) -> (Self, *const T) {
+        let scan_ptr: *const dyn Scan = v.to_scan();
+        let raw_ptr: *const T = Box::into_raw(v);
+
+        (
+            Self {
+                scan_ptr,
+                deallocation_action: DeallocationAction::BoxDrop,
             },
             raw_ptr,
         )
@@ -121,11 +135,24 @@ impl GcAllocation {
                 // So we can run `finalize` here, right before deallocation
                 (&mut *(finalize_ptr as *mut dyn Finalize)).finalize();
             }
+            DeallocationAction::BoxDrop => {
+                // Safe as long as only boxed values are created with BoxDrop deallocate action
+                // Additionally, this is the only instance where the pointer should be alive so
+                // we are not taking it mutably anywhere else. The death of a pointer in action,
+                // really makes you think...
+                let box_ptr = Box::from_raw(scan_ptr as *mut dyn Scan);
+                // drop like normal
+                drop(box_ptr);
+            }
         }
 
-        let dealloc_layout = Layout::for_value(&*scan_ptr);
-        let heap_ptr = scan_ptr as *mut u8;
-        dealloc(heap_ptr, dealloc_layout);
+        // Only call dealloc() if we're not dealing with a boxed value, because the box gets
+        // dropped above.
+        if !matches!(self.deallocation_action, DeallocationAction::BoxDrop) {
+            let dealloc_layout = Layout::for_value(&*scan_ptr);
+            let heap_ptr = scan_ptr as *mut u8;
+            dealloc(heap_ptr, dealloc_layout);
+        }
     }
 
     pub fn scan<F: FnMut(InternalGcRef)>(&self, callback: F) {
