@@ -17,7 +17,7 @@ pub(crate) enum DropMessage {
 }
 
 impl BackgroundDropper {
-    pub fn new() -> BackgroundDropper {
+    pub fn new() -> Self {
         let (sender, receiver) = crossbeam::unbounded();
 
         // The drop thread deals with doing all the Drops this collector needs to do
@@ -48,7 +48,7 @@ impl BackgroundDropper {
             }
         });
 
-        BackgroundDropper { sender }
+        Self { sender }
     }
 
     pub fn send_msg(&self, msg: DropMessage) -> Result<(), SendError<DropMessage>> {

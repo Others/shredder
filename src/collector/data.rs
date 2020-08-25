@@ -52,8 +52,8 @@ impl UnderlyingData {
     #[inline]
     pub unsafe fn with_data<F: FnOnce(&GcData)>(&self, f: F) {
         match self {
-            UnderlyingData::Fixed(data) => f(&*data),
-            UnderlyingData::DynamicForAtomic(ptr) => {
+            Self::Fixed(data) => f(&*data),
+            Self::DynamicForAtomic(ptr) => {
                 let arc_ptr = ptr.load(Ordering::Relaxed);
                 f(&*arc_ptr)
             }

@@ -9,13 +9,15 @@ use crossbeam::queue::SegQueue;
 const CHUNK_SIZE: usize = 1024;
 
 /// It's a linked list of chunks, with an associated free list!
-/// Note that there is a major limitiation: the backing memory is never deallocated
+/// Note that there is a major limitation: the backing memory is never deallocated
 /// (That means this data structure is only useful for globals)
 #[derive(Debug)]
 pub struct ChunkedLinkedList<T> {
-    ///
+    /// basically a free-queue storing pointers to chunks + indexes where there is an empty spot
     free_entries: SegQueue<(*const Chunk<T>, usize)>,
+    /// head of linked list of data storing chunks
     head: AtomicPtr<Chunk<T>>,
+    /// an estimate of how many items are in this linked list
     estimated_len: AtomicUsize,
 }
 
@@ -151,6 +153,11 @@ impl<T> ChunkedLinkedList<T> {
                 .compare_and_swap(old_head, new_head, Ordering::Relaxed);
             if res == old_head {
                 break;
+            } else {
+                // Get rid of that memory we allocated
+                unsafe {
+                    Box::from_raw(new_head);
+                }
             }
         }
 
