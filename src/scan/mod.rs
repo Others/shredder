@@ -5,12 +5,12 @@ mod std_impls;
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
 
+use crate::atomic::AtomicGc;
 use crate::collector::InternalGcRef;
 use crate::Gc;
 
-use crate::atomic::AtomicGc;
-pub use helper::EmptyScan;
-pub use r::{RMut, R};
+pub use crate::scan::helper::EmptyScan;
+pub use crate::scan::r::{RMut, R};
 
 /// A trait capturing the ability of data to be scanned for references to data in a `Gc`.
 ///

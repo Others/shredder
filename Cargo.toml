@@ -13,8 +13,8 @@ version = "0.1.3-dev"
 edition = "2018"
 
 [dependencies]
+arc-swap = "0.4.7"
 crossbeam = "0.7.3"
-dashmap = { version = "3.11", features = ["raw-api"] }
 dynqueue = { version = "0.1.3", features = ["crossbeam-queue"] }
 log = "0.4.8"
 once_cell = "1.4"

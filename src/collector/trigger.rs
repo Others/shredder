@@ -59,7 +59,7 @@ impl GcTrigger {
 
 impl Default for GcTrigger {
     fn default() -> Self {
-        GcTrigger {
+        Self {
             data: Mutex::new(InternalTriggerData {
                 allocations_trigger_percent: DEFAULT_ALLOCATION_TRIGGER_PERCENT,
                 handle_deficit_trigger_percent: DEFAULT_HANDLE_DEFICIT_TRIGGER_PERCENT,

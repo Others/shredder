@@ -12,12 +12,14 @@ pub(crate) struct BackgroundDropper {
 }
 
 pub(crate) enum DropMessage {
+    /// Signals the `BackgroundDropper` to deallocate the following data (possibly running some destructor)
     DataToDrop(Arc<GcData>),
+    /// Indicates to the `BackgroundDropper` that it should sync up with the calling code
     SyncUp(Sender<()>),
 }
 
 impl BackgroundDropper {
-    pub fn new() -> BackgroundDropper {
+    pub fn new() -> Self {
         let (sender, receiver) = crossbeam::unbounded();
 
         // The drop thread deals with doing all the Drops this collector needs to do
@@ -48,7 +50,7 @@ impl BackgroundDropper {
             }
         });
 
-        BackgroundDropper { sender }
+        Self { sender }
     }
 
     pub fn send_msg(&self, msg: DropMessage) -> Result<(), SendError<DropMessage>> {

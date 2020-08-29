@@ -7,7 +7,8 @@ use parking_lot::Mutex;
 const EXCLUSIVE_SIGNPOST: u64 = !0;
 
 /// The Lockout mechanism is used internally. It's basically just a `RwLock` that doesn't support
-/// blocking on reads, and gives out guards that use an Arc instead of a reference
+/// blocking on reads. It also has a `LockoutProvider` interface that eases sharing the guards
+/// in a non-trivial way
 #[derive(Debug)]
 pub struct Lockout {
     count: AtomicU64,

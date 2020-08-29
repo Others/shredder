@@ -164,8 +164,8 @@ impl GcAllocation {
     }
 
     #[cfg(test)]
-    pub(crate) unsafe fn raw(v: *const dyn Scan) -> GcAllocation {
-        GcAllocation {
+    pub(crate) unsafe fn raw(v: *const dyn Scan) -> Self {
+        Self {
             scan_ptr: v,
             deallocation_action: DeallocationAction::DoNothing,
         }

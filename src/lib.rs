@@ -31,6 +31,7 @@
     clippy::needless_borrow,
     clippy::pedantic,
     clippy::redundant_clone,
+    clippy::use_self,
     rust_2018_idioms
 )]
 // But I don't care about these ones
@@ -53,8 +54,8 @@ extern crate rental;
 /// Atomic gc operations
 pub mod atomic;
 mod collector;
+mod concurrency;
 mod finalize;
-mod lockout;
 mod scan;
 mod smart_ptr;
 /// Helpful wrappers used for convenience methods
@@ -63,14 +64,14 @@ pub mod wrappers;
 use std::cell::RefCell;
 use std::sync::{Mutex, RwLock};
 
-use collector::COLLECTOR;
-
-pub use finalize::Finalize;
-pub use scan::{EmptyScan, GcSafe, GcSafeWrapper, RMut, Scan, Scanner, ToScan, R};
-pub use smart_ptr::{Gc, GcGuard};
+use crate::collector::COLLECTOR;
 
 // Re-export the Scan derive
 pub use shredder_derive::Scan;
+
+pub use crate::finalize::Finalize;
+pub use crate::scan::{EmptyScan, GcSafe, GcSafeWrapper, RMut, Scan, Scanner, ToScan, R};
+pub use crate::smart_ptr::{Gc, GcGuard};
 
 /// A convenient alias for `Gc<RefCell<T>>`.
 /// Note that `Gc<RefCell<T>>` has additional specialized methods for working with `RefCell`s inside
