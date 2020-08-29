@@ -12,7 +12,9 @@ pub(crate) struct BackgroundDropper {
 }
 
 pub(crate) enum DropMessage {
+    /// Signals the `BackgroundDropper` to deallocate the following data (possibly running some destructor)
     DataToDrop(Arc<GcData>),
+    /// Indicates to the `BackgroundDropper` that it should sync up with the calling code
     SyncUp(Sender<()>),
 }
 
