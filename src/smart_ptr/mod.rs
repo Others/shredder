@@ -5,6 +5,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync;
+use std::sync::atomic;
 #[cfg(feature = "nightly-features")]
 use std::{marker::Unsize, ops::CoerceUnsized};
 
@@ -115,6 +116,12 @@ impl<T: Scan + ?Sized> Gc<T> {
             gc_ptr: self,
             _warrant: warrant,
         }
+    }
+
+    pub(crate) fn assert_live(&self) {
+        let ordering = atomic::Ordering::Relaxed;
+        let is_deallocated = self.backing_handle.data().deallocated.load(ordering);
+        assert!(!is_deallocated);
     }
 
     pub(crate) fn internal_handle(&self) -> InternalGcRef {
