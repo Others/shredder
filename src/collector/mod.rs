@@ -38,9 +38,9 @@ impl InternalGcRef {
         COLLECTOR.drop_handle(self);
     }
 
-    pub(crate) fn data(&self) -> Arc<GcData> {
+    pub(crate) fn data(&self) -> &Arc<GcData> {
         if let UnderlyingData::Fixed(data) = &self.handle_ref.v.underlying_data {
-            data.clone()
+            data
         } else {
             panic!("Only fixed data has a usable `data` method")
         }
@@ -201,7 +201,7 @@ impl Collector {
 
     pub fn clone_handle(&self, handle: &InternalGcRef) -> InternalGcRef {
         let new_handle_arc = Arc::new(GcHandle {
-            underlying_data: UnderlyingData::Fixed(handle.data()),
+            underlying_data: UnderlyingData::Fixed(handle.data().clone()),
             last_non_rooted: AtomicU64::new(0),
         });
 

@@ -4,6 +4,9 @@ use std::sync::Arc;
 use std::thread::spawn;
 
 use crossbeam::{SendError, Sender};
+use parking_lot::RwLock;
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 
 use crate::collector::GcData;
 
@@ -13,7 +16,7 @@ pub(crate) struct BackgroundDropper {
 
 pub(crate) enum DropMessage {
     /// Signals the `BackgroundDropper` to deallocate the following data (possibly running some destructor)
-    DataToDrop(Arc<GcData>),
+    DataToDrop(RwLock<Vec<Arc<GcData>>>),
     /// Indicates to the `BackgroundDropper` that it should sync up with the calling code
     SyncUp(Sender<()>),
 }
@@ -27,19 +30,25 @@ impl BackgroundDropper {
             // An Err value means the stream will never recover
             while let Ok(drop_msg) = receiver.recv() {
                 match drop_msg {
-                    DropMessage::DataToDrop(data) => {
-                        // Mark this data as in the process of being deallocated and unsafe to access
-                        // NOTE: All drops must be linearly in one thread, otherwise there could be a race around this flag being set
-                        data.deallocated.store(true, Ordering::SeqCst);
+                    DropMessage::DataToDrop(to_drop) => {
+                        let to_drop = to_drop.read();
 
-                        // Deallocate / Run Drop
-                        let underlying_allocation = data.underlying_allocation;
-                        let res = catch_unwind(move || unsafe {
-                            underlying_allocation.deallocate();
+                        // NOTE: It's important that all data is correctly marked as deallocated before we start
+                        to_drop.par_iter().for_each(|data| {
+                            // Mark this data as in the process of being deallocated and unsafe to access
+                            data.deallocated.store(true, Ordering::SeqCst);
                         });
-                        if let Err(e) = res {
-                            eprintln!("Gc background drop failed: {:?}", e);
-                        }
+
+                        // Then run the drops if needed
+                        to_drop.par_iter().for_each(|data| {
+                            let underlying_allocation = data.underlying_allocation;
+                            let res = catch_unwind(move || unsafe {
+                                underlying_allocation.deallocate();
+                            });
+                            if let Err(e) = res {
+                                eprintln!("Gc background drop failed: {:?}", e);
+                            }
+                        });
                     }
                     DropMessage::SyncUp(responder) => {
                         if let Err(e) = responder.send(()) {

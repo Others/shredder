@@ -1,8 +1,9 @@
 use std::sync::atomic::Ordering;
 
+use crossbeam::deque::Injector;
 use crossbeam::queue::SegQueue;
 use dynqueue::DynQueue;
-use parking_lot::MutexGuard;
+use parking_lot::{MutexGuard, RwLock};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 use crate::collector::dropper::DropMessage;
@@ -33,7 +34,7 @@ impl Collector {
         self.synchronize_destructors();
 
         // The warrant system prevents us from scanning in-use data
-        let warrants: SegQueue<GcExclusiveWarrant> = SegQueue::new();
+        let warrants: Injector<GcExclusiveWarrant> = Injector::new();
 
         // eprintln!("tracked data {:?}", tracked_data);
         // eprintln!("tracked handles {:?}", tracked_handles);
@@ -118,6 +119,8 @@ impl Collector {
         drop(warrants);
 
         // Now cleanup by removing all the data that is done for
+        let to_drop = RwLock::new(Vec::new());
+
         self.tracked_data.data.par_retain(|data| {
             // Mark the new data as in use for now
             // This stops us deallocating data that was allocated during collection
@@ -133,18 +136,18 @@ impl Collector {
                 // Otherwise we didn't mark it and it should be deallocated
                 // eprintln!("deallocating {:?}", data_ptr);
                 // Send it to the drop thread to be dropped
-                let drop_msg = DropMessage::DataToDrop(data.clone());
-                if let Err(e) = self.dropper.send_msg(drop_msg) {
-                    error!("Error sending to drop thread {}", e);
-                }
-
-                // Note: It's okay to send all the data before we've removed it from the map
-                // The destructor manages the `destructed` flag so we can never access free'd data
+                to_drop.write().push(data.clone());
 
                 // Don't retain this data
                 false
             }
         });
+
+        // Send off the data to be dropped in the background
+        let drop_msg = DropMessage::DataToDrop(to_drop);
+        if let Err(e) = self.dropper.send_msg(drop_msg) {
+            error!("Error sending to drop thread {}", e);
+        }
 
         // update the trigger based on the new baseline
         self.trigger
