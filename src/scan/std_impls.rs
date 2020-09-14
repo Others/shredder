@@ -145,6 +145,8 @@ unsafe impl<T: Scan + ?Sized> Scan for RwLock<T> {
 unsafe impl<T: GcSafe + ?Sized> GcSafe for RwLock<T> {}
 
 // Primitives do not hold any Gc<T>s
+impl EmptyScan for bool {}
+
 impl EmptyScan for isize {}
 impl EmptyScan for usize {}
 
