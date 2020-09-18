@@ -108,6 +108,9 @@ pub struct CLLItem<T> {
     idx: usize,
 }
 
+unsafe impl<T> Send for CLLItem<T> {}
+unsafe impl<T> Sync for CLLItem<T> {}
+
 impl<T> Clone for CLLItem<T> {
     fn clone(&self) -> Self {
         Self {

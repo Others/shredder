@@ -18,6 +18,7 @@ use crate::collector::trigger::GcTrigger;
 use crate::concurrency::atomic_protection::{APSInclusiveGuard, AtomicProtectingSpinlock};
 use crate::concurrency::chunked_ll::{CLLItem, ChunkedLinkedList};
 use crate::concurrency::lockout::{ExclusiveWarrant, Lockout, Warrant};
+use crate::marker::GcDrop;
 use crate::{Finalize, Scan, ToScan};
 
 pub use crate::collector::data::{GcData, GcHandle, UnderlyingData};
@@ -136,7 +137,7 @@ impl Collector {
         };
     }
 
-    pub fn track_with_drop<T: Scan + 'static>(&self, data: T) -> (InternalGcRef, *const T) {
+    pub fn track_with_drop<T: Scan + GcDrop>(&self, data: T) -> (InternalGcRef, *const T) {
         let (gc_data_ptr, heap_ptr) = GcAllocation::allocate_with_drop(data);
         self.track(gc_data_ptr, heap_ptr)
     }
@@ -154,7 +155,7 @@ impl Collector {
         self.track(gc_data_ptr, heap_ptr)
     }
 
-    pub fn track_boxed_value<T: Scan + ToScan + ?Sized + 'static>(
+    pub fn track_boxed_value<T: Scan + ToScan + GcDrop + ?Sized>(
         &self,
         data: Box<T>,
     ) -> (InternalGcRef, *const T) {
@@ -321,7 +322,8 @@ pub static COLLECTOR: Lazy<Arc<Collector>> = Lazy::new(Collector::new);
 
 #[cfg(test)]
 pub(crate) fn get_mock_handle() -> InternalGcRef {
-    use crate::{GcSafe, Scanner};
+    use crate::marker::GcSafe;
+    use crate::Scanner;
 
     pub(crate) struct MockAllocation;
     unsafe impl Scan for MockAllocation {

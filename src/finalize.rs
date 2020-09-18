@@ -1,6 +1,4 @@
-use crate::{Gc, Scan};
-
-/// A trait implementing an alternative to `Drop`, useful for non-`'static` data.
+/// A trait implementing an alternative to `Drop`, useful for non-`GcDrop` data.
 ///
 /// Usually when you have data in a `Gc` you just want its destructor to be called when the data is
 /// collected. However, the collector can't naively run the `drop` method of non-`'static` data,
@@ -9,12 +7,22 @@ use crate::{Gc, Scan};
 /// provide a safe alternative to holding a direct reference with a non-'static lifetime. Then the
 /// `Finalize` trait let's you opt-in to writing unsafe code at deallocation time.
 ///
-/// # Safety
-/// When implementing this trait, you must guarantee that your data does not contain any
-/// non-`'static` references. (You may use `R` and `RMut` instead!)
+/// Data that is `!GcDrop` for other reasons/contains a `DerefGc`
 ///
-/// Furthermore, you must guarantee that `finalize` does not access any data with a non-`'static`
-/// lifetime. In particular you may not call any methods on `R` or `RMut` other than `finalize`.
+/// # Safety
+/// When implementing this trait you're promising a few things:
+///
+/// 1) Tour data does not contain any non-`'static` references.
+/// (You may use `R` and `RMut` instead!)
+///
+/// 2) Your `finalize` method does not access any data with a non-`'static` lifetime. In particular
+/// you may not call any methods on `R` or `RMut` other than `finalize`. (No `Deref` either!)
+///
+/// 3) Your `finalize` method does not call any methods on a `AtomicGc` or `DerefGc`.
+/// (No `Deref` either!)
+///
+/// 4) Your `finalize` method does not make an `AtomicGc`, `DerefGc`, `R` or `RMut` "live again."
+/// Basically you must not send one of these pieces of data to another thread.
 pub unsafe trait Finalize {
     /// Do cleanup on this data, potentially leaving it in an invalid state.
     /// (See trait documentation for the rules for implementing this method.)
@@ -27,78 +35,4 @@ pub unsafe trait Finalize {
     /// may not even drop this object! You must `mem::forget` it or otherwise force its destructor
     /// not to run.
     unsafe fn finalize(&mut self);
-}
-
-unsafe impl<T: Scan + ?Sized> Finalize for Gc<T> {
-    unsafe fn finalize(&mut self) {
-        self.internal_handle().invalidate();
-    }
-}
-
-// FIXME: Github issue for missing `Finalize` implementations
-macro_rules! impl_empty_finalize_for_static_type {
-    ($t:ty) => {
-        unsafe impl Finalize for $t
-        where
-            $t: 'static,
-        {
-            unsafe fn finalize(&mut self) {}
-        }
-    };
-}
-
-// Primitives need no finalization logic
-impl_empty_finalize_for_static_type!(isize);
-impl_empty_finalize_for_static_type!(usize);
-
-impl_empty_finalize_for_static_type!(i8);
-impl_empty_finalize_for_static_type!(u8);
-
-impl_empty_finalize_for_static_type!(i16);
-impl_empty_finalize_for_static_type!(u16);
-
-impl_empty_finalize_for_static_type!(i32);
-impl_empty_finalize_for_static_type!(u32);
-
-impl_empty_finalize_for_static_type!(i64);
-impl_empty_finalize_for_static_type!(u64);
-
-impl_empty_finalize_for_static_type!(i128);
-impl_empty_finalize_for_static_type!(u128);
-
-#[cfg(test)]
-mod test {
-    use crate::Finalize;
-
-    macro_rules! test_no_panic_finalize {
-        ($t:ident, $v:expr) => {
-            paste::item! {
-                #[test]
-                fn [<finalize_no_panic_ $t>]() {
-                    let mut v: $t = $v;
-                    unsafe {
-                        v.finalize();
-                    }
-                }
-            }
-        };
-    }
-
-    test_no_panic_finalize!(isize, 1);
-    test_no_panic_finalize!(usize, 1);
-
-    test_no_panic_finalize!(i8, 1);
-    test_no_panic_finalize!(u8, 1);
-
-    test_no_panic_finalize!(i16, 1);
-    test_no_panic_finalize!(u16, 1);
-
-    test_no_panic_finalize!(i32, 1);
-    test_no_panic_finalize!(u32, 1);
-
-    test_no_panic_finalize!(i64, 1);
-    test_no_panic_finalize!(u64, 1);
-
-    test_no_panic_finalize!(i128, 1);
-    test_no_panic_finalize!(u128, 1);
 }

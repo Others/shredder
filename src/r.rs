@@ -3,12 +3,29 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use crate::{EmptyScan, GcSafe, Scan, Scanner};
+use crate::marker::{GcDeref, GcDrop, GcSafe};
+use crate::{Finalize, Scan, Scanner};
 
 // Only straight up `'static` references can be `Scan` or `GcSafe`, since other references may
 // become invalid after their lifetime ends
-impl<T> EmptyScan for &'static T where &'static T: Send {}
-impl<T> EmptyScan for &'static mut T where &'static mut T: Send {}
+unsafe impl<T> GcSafe for &'static T where &'static T: Send {}
+unsafe impl<T> Scan for &'static T
+where
+    &'static T: Send,
+{
+    #[inline(always)]
+    fn scan(&self, _: &mut Scanner<'_>) {}
+}
+// A static reference is also okay to touch in a destructor
+unsafe impl<T> GcDrop for &'static T {}
+// And if `T` is `GcDeref`, then so is a static reference to it
+unsafe impl<T> GcDeref for &'static T where T: GcDeref {}
+
+unsafe impl<T> Finalize for &'static T {
+    // Nothing to do
+    #[inline(always)]
+    unsafe fn finalize(&mut self) {}
+}
 
 // But other references can become safe through careful manipulation!
 
@@ -50,9 +67,14 @@ pub struct RMut<'a, T: ?Sized> {
     _marker: PhantomData<&'a mut T>,
 }
 
-// Impl `GcSafe` and `Scan`!
 unsafe impl<'a, T: ?Sized> GcSafe for R<'a, T> {}
+unsafe impl<'a, T: ?Sized> GcDrop for R<'a, T> where 'a: 'static {}
+unsafe impl<'a, T: ?Sized> GcDeref for R<'a, T> where T: GcDeref {}
+
 unsafe impl<'a, T: ?Sized> GcSafe for RMut<'a, T> {}
+// unsafe impl<'a, T: ?Sized> !GcDrop for RMut<'a, T> {}
+// FIXME: Kinda a subtle impl, not sure if it's correct
+unsafe impl<'a, T: ?Sized> GcDeref for RMut<'a, T> where T: GcDeref {}
 
 unsafe impl<'a, T: ?Sized> Scan for R<'a, T> {
     #[inline(always)]
@@ -61,6 +83,18 @@ unsafe impl<'a, T: ?Sized> Scan for R<'a, T> {
 unsafe impl<'a, T: ?Sized> Scan for RMut<'a, T> {
     #[inline(always)]
     fn scan(&self, _: &mut Scanner<'_>) {}
+}
+
+unsafe impl<'a, T> Finalize for R<'a, T> {
+    // Nothing to do
+    #[inline(always)]
+    unsafe fn finalize(&mut self) {}
+}
+
+unsafe impl<'a, T> Finalize for RMut<'a, T> {
+    // Nothing to do
+    #[inline(always)]
+    unsafe fn finalize(&mut self) {}
 }
 
 // Fixup the concurrency marker traits

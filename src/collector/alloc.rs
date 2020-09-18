@@ -4,6 +4,7 @@ use std::panic::UnwindSafe;
 use std::ptr;
 
 use crate::collector::InternalGcRef;
+use crate::marker::GcDrop;
 use crate::{Finalize, Scan, Scanner, ToScan};
 
 /// Represents a piece of data allocated by shredder
@@ -31,7 +32,7 @@ impl UnwindSafe for GcAllocation {}
 unsafe impl Sync for GcAllocation {}
 
 impl GcAllocation {
-    pub fn allocate_with_drop<T: Scan + 'static>(v: T) -> (Self, *const T) {
+    pub fn allocate_with_drop<T: Scan + GcDrop>(v: T) -> (Self, *const T) {
         let (scan_ptr, raw_ptr) = Self::raw_allocate(v);
         (
             Self {
@@ -68,7 +69,7 @@ impl GcAllocation {
         )
     }
 
-    pub fn from_box<T: Scan + ToScan + ?Sized + 'static>(v: Box<T>) -> (Self, *const T) {
+    pub fn from_box<T: Scan + ToScan + GcDrop + ?Sized>(v: Box<T>) -> (Self, *const T) {
         let scan_ptr: *const dyn Scan = v.to_scan();
         let raw_ptr: *const T = Box::into_raw(v);
 

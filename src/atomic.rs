@@ -1,10 +1,12 @@
 use std::marker::PhantomData;
 use std::mem;
+use std::ptr::drop_in_place;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 
 use crate::collector::{GcData, InternalGcRef, COLLECTOR};
-use crate::{Gc, Scan};
+use crate::marker::{GcDeref, GcSafe};
+use crate::{Finalize, Gc, Scan, Scanner};
 
 /// An atomic `Gc<T>`, useful for concurrent algorithms
 ///
@@ -57,21 +59,19 @@ impl<T: Scan> AtomicGc<T> {
     /// `load` the data from this `AtomicGc<T>`, getting back a `Gc<T>`
     ///
     /// The ordering/atomicity guarantees are identical to `AtomicPtr::load`
-    ///
-    /// # Safety
-    /// Must not be called from a Gc<T> destructor! Also you may not load from an atomic storing
-    /// data that has been deallocated. (Only possible if you send a `AtomicGc` out of the
-    /// background thread somehow.)
     #[must_use]
-    pub unsafe fn load(&self, ordering: Ordering) -> Gc<T> {
+    pub fn load(&self, ordering: Ordering) -> Gc<T> {
         let ptr;
         let internal_handle;
         {
             let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
 
             // Safe to manipulate this ptr only because we have the `_collection_blocker`
+            // (And we know this `Arc` still has a pointer in the collector data structures,
+            // otherwise someone would be accessing an `AtomicGc` pointing to freed data--which
+            // is impossible in safe code.)
             let gc_data_ptr = self.atomic_ptr.load(ordering);
-            let gc_data_temp = Arc::from_raw(gc_data_ptr);
+            let gc_data_temp = unsafe { Arc::from_raw(gc_data_ptr) };
 
             // Create a new `Arc` pointing to the same data, but don't invalidate the existing `Arc`
             // (which is effectively "behind" the pointer)
@@ -88,12 +88,7 @@ impl<T: Scan> AtomicGc<T> {
     /// `store` new data into this `AtomicGc`
     ///
     /// The ordering/atomicity guarantees are identical to `AtomicPtr::store`
-    ///
-    /// # Safety
-    /// Must not be called from a Gc<T> destructor! Also you may not load from an atomic storing
-    /// data that has been deallocated. (Only possible if you send a `AtomicGc` out of the
-    /// background thread somehow.)
-    pub unsafe fn store(&self, v: &Gc<T>, ordering: Ordering) {
+    pub fn store(&self, v: &Gc<T>, ordering: Ordering) {
         // Ensure we're not storing dead data...
         v.assert_live();
 
@@ -104,6 +99,9 @@ impl<T: Scan> AtomicGc<T> {
             let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
 
             // Safe to manipulate this ptr only because we have the `_collection_blocker`
+            // (And we know this `Arc` still has a pointer in the collector data structures,
+            // otherwise someone would be accessing an `AtomicGc` pointing to freed data--which
+            // is impossible in safe code.)
             self.atomic_ptr.store(raw_data_ptr as _, ordering);
         }
     }
@@ -111,13 +109,8 @@ impl<T: Scan> AtomicGc<T> {
     /// `swap` what data is stored in this `AtomicGc`, getting a `Gc` to the old data back
     ///
     /// The ordering/atomicity guarantees are identical to `AtomicPtr::swap`
-    ///
-    /// # Safety
-    /// Must not be called from a Gc<T> destructor! Also you may not load from an atomic storing
-    /// data that has been deallocated. (Only possible if you send a `AtomicGc` out of the
-    /// background thread somehow.)
     #[must_use]
-    pub unsafe fn swap(&self, v: &Gc<T>, ordering: Ordering) -> Gc<T> {
+    pub fn swap(&self, v: &Gc<T>, ordering: Ordering) -> Gc<T> {
         // Ensure we're not storing dead data...
         v.assert_live();
 
@@ -130,8 +123,11 @@ impl<T: Scan> AtomicGc<T> {
             let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
             let old_data_ptr = self.atomic_ptr.swap(raw_data_ptr as _, ordering);
 
-            // Safe since we know the collector is blocked
-            let old_data_arc = Arc::from_raw(old_data_ptr);
+            // Safe to manipulate this ptr only because we have the `_collection_blocker`
+            // (And we know this `Arc` still has a pointer in the collector data structures,
+            // otherwise someone would be accessing an `AtomicGc` pointing to freed data--which
+            // is impossible in safe code.)
+            let old_data_arc = unsafe { Arc::from_raw(old_data_ptr) };
             let gc_data = old_data_arc.clone();
             mem::forget(old_data_arc);
 
@@ -153,18 +149,8 @@ impl<T: Scan> AtomicGc<T> {
     /// # Returns
     /// Returns `true` if the swap happened and this `AtomicGc` now points to `new`
     /// Returns `false` if the swap failed / this `AtomicGc` was not pointing to `current`
-    ///
-    /// # Safety
-    /// Must not be called from a Gc<T> destructor! Also you may not load from an atomic storing
-    /// data that has been deallocated. (Only possible if you send a `AtomicGc` out of the
-    /// background thread somehow.)
     #[allow(clippy::must_use_candidate)]
-    pub unsafe fn compare_and_swap(
-        &self,
-        current: &Gc<T>,
-        new: &Gc<T>,
-        ordering: Ordering,
-    ) -> bool {
+    pub fn compare_and_swap(&self, current: &Gc<T>, new: &Gc<T>, ordering: Ordering) -> bool {
         // Ensure we're not storing dead data...
         new.assert_live();
 
@@ -179,7 +165,10 @@ impl<T: Scan> AtomicGc<T> {
         let compare_res;
         {
             let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
-            // Only safe since we have the `collection_blocker`
+            // Safe to manipulate this ptr only because we have the `_collection_blocker`
+            // (And we know this `Arc` still has a pointer in the collector data structures,
+            // otherwise someone would be accessing an `AtomicGc` pointing to freed data--which
+            // is impossible in safe code.)
             compare_res = self
                 .atomic_ptr
                 .compare_and_swap(guess_data_raw, new_data_raw, ordering);
@@ -200,13 +189,8 @@ impl<T: Scan> AtomicGc<T> {
     /// # Returns
     /// Returns `true` if the swap happened and this `AtomicGc` now points to `new`
     /// Returns `false` if the swap failed / this `AtomicGc` was not pointing to `current`
-    ///
-    /// # Safety
-    /// Must not be called from a Gc<T> destructor! Also you may not load from an atomic storing
-    /// data that has been deallocated. (Only possible if you send a `AtomicGc` out of the
-    /// background thread somehow.)
     #[allow(clippy::must_use_candidate)]
-    pub unsafe fn compare_exchange(
+    pub fn compare_exchange(
         &self,
         current: &Gc<T>,
         new: &Gc<T>,
@@ -225,6 +209,10 @@ impl<T: Scan> AtomicGc<T> {
         let compare_res;
         {
             let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
+            // Safe to manipulate this ptr only because we have the `_collection_blocker`
+            // (And we know this `Arc` still has a pointer in the collector data structures,
+            // otherwise someone would be accessing an `AtomicGc` pointing to freed data--which
+            // is impossible in safe code.)
             compare_res =
                 self.atomic_ptr
                     .compare_exchange(guess_data_raw, new_data_raw, success, failure);
@@ -234,6 +222,22 @@ impl<T: Scan> AtomicGc<T> {
     }
 
     // TODO: Compare and swap/compare and exchange that return the current value
+}
+
+unsafe impl<T: Scan> Scan for AtomicGc<T> {
+    fn scan(&self, scanner: &mut Scanner<'_>) {
+        scanner.add_internal_handle(self.internal_handle());
+    }
+}
+
+unsafe impl<T: Scan> GcSafe for AtomicGc<T> {}
+// unsafe impl<T: Scan> !GcDrop for AtomicGc<T> {}
+unsafe impl<T: Scan + Send + Sync> GcDeref for AtomicGc<T> {}
+
+unsafe impl<T: Scan> Finalize for AtomicGc<T> {
+    unsafe fn finalize(&mut self) {
+        drop_in_place(self)
+    }
 }
 
 impl<T: Scan> Drop for AtomicGc<T> {
