@@ -40,8 +40,8 @@ unsafe impl<K: Scan, V: Scan> Scan for BTreeMap<K, V> {
 
 unsafe impl<K: Finalize, V: Finalize> Finalize for BTreeMap<K, V> {
     unsafe fn finalize(&mut self) {
-        let set = read(self);
-        for mut e in set {
+        let map = read(self);
+        for mut e in map {
             e.finalize();
             forget(e);
         }
@@ -107,8 +107,8 @@ unsafe impl<K: Scan, V: Scan, S: BuildHasher + GcSafe> Scan for HashMap<K, V, S>
 
 unsafe impl<K: Finalize, V: Finalize, S: BuildHasher> Finalize for HashMap<K, V, S> {
     unsafe fn finalize(&mut self) {
-        let set = read(self);
-        for mut e in set {
+        let map = read(self);
+        for mut e in map {
             e.finalize();
             forget(e);
         }

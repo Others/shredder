@@ -117,7 +117,9 @@ impl<T: Scan + ?Sized> Gc<T> {
     ///
     /// `get` is used to get a `GcGuard`. This is usually what you want when accessing non-`Sync`
     /// data in a `Gc`. The API is very analogous to the `Mutex` API. It may block if the data is
-    /// being scanned
+    /// being scanned.
+    ///
+    /// If you wish to avoid this, consider `GcDeref` as an alternative.
     #[must_use]
     pub fn get(&self) -> GcGuard<'_, T> {
         let warrant = COLLECTOR.get_data_warrant(&self.backing_handle);

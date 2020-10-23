@@ -15,7 +15,10 @@ use std::ops::{Deref, DerefMut};
 /// not `Send` or `'static`
 pub unsafe trait GcSafe {}
 
-/// `GcSafeWrapper` wraps a `Send + 'static` datatype to make it `GcSafe`
+/// `GcSafeWrapper` wraps a piece of data to make it `GcSafe`
+///
+/// This lets you safely work with `Send + 'static` data in `Gc`s, and unsafely work with data that
+/// is `!(Send + 'static)`.
 ///
 /// Usually you'd just want to implement `GcSafe` directly, but this is useful situationally if
 /// you need to use someone else's type which does not implement `GcSafe`.

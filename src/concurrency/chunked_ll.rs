@@ -66,10 +66,9 @@ impl<T> Chunk<T> {
     {
         for i in 0..CHUNK_SIZE {
             let current = self.values[i].load();
-            let should_retain = if let Some(arc) = &*current {
-                f(arc)
-            } else {
-                true
+            let should_retain = match &*current {
+                Some(arc) => f(arc),
+                None => true,
             };
 
             if !should_retain {

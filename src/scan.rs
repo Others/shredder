@@ -6,6 +6,7 @@ use crate::marker::GcSafe;
 /// This is unsafe, since a bad `scan` implementation can cause memory unsafety in two ways:
 /// 1) If `scan` scans data that this object does not own
 /// 2) If `scan` does anything other than `scan` data with a non-`'static` lifetime
+/// 3) If `scan` is non-deterministic about what owned data it scans
 ///
 /// The importance of (1) is so that the collector does not collect data that is in use. The
 /// importance of (2) is so that data can still be scanned even after its lifetime has

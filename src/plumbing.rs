@@ -31,5 +31,12 @@ macro_rules! mark_send_static_gc_safe {
 macro_rules! impl_empty_scan_for_send_static {
     ( $t:ty ) => {
         unsafe impl GcSafe for $t where $t: Send + 'static {}
+        unsafe impl Scan for $t
+        where
+            $t: Send + 'static,
+        {
+            #[inline(always)]
+            fn scan(&self, _: &mut crate::Scanner<'_>) {}
+        }
     };
 }
