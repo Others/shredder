@@ -1,5 +1,6 @@
-#[macro_use]
 extern crate shredder;
+
+use shredder::Scan;
 
 struct NotScan {}
 

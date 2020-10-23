@@ -1,6 +1,7 @@
+use shredder::marker::GcDrop;
 use shredder::*;
 
-trait Node: Scan + ToScan {
+trait Node: Scan + ToScan + GcDrop {
     fn max_number(&self) -> Option<i64>;
     fn longest_string(&self) -> Option<String>;
 }

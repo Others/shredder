@@ -66,10 +66,9 @@ impl<T> Chunk<T> {
     {
         for i in 0..CHUNK_SIZE {
             let current = self.values[i].load();
-            let should_retain = if let Some(arc) = &*current {
-                f(arc)
-            } else {
-                true
+            let should_retain = match &*current {
+                Some(arc) => f(arc),
+                None => true,
             };
 
             if !should_retain {
@@ -107,6 +106,9 @@ pub struct CLLItem<T> {
     from: *const Chunk<T>,
     idx: usize,
 }
+
+unsafe impl<T> Send for CLLItem<T> {}
+unsafe impl<T> Sync for CLLItem<T> {}
 
 impl<T> Clone for CLLItem<T> {
     fn clone(&self) -> Self {

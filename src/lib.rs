@@ -56,8 +56,14 @@ pub mod atomic;
 mod collector;
 mod concurrency;
 mod finalize;
+/// Marker types
+pub mod marker;
+/// Various types used for plumbing, stuff you don't need to care about
+pub mod plumbing;
+mod r;
 mod scan;
 mod smart_ptr;
+mod std_impls;
 /// Helpful wrappers used for convenience methods
 pub mod wrappers;
 
@@ -66,12 +72,10 @@ use std::sync::{Mutex, RwLock};
 
 use crate::collector::COLLECTOR;
 
-// Re-export the Scan derive
-pub use shredder_derive::Scan;
-
 pub use crate::finalize::Finalize;
-pub use crate::scan::{EmptyScan, GcSafe, GcSafeWrapper, RMut, Scan, Scanner, ToScan, R};
-pub use crate::smart_ptr::{Gc, GcGuard};
+pub use crate::r::{RMut, R};
+pub use crate::scan::{Scan, Scanner, ToScan};
+pub use crate::smart_ptr::{DerefGc, Gc, GcGuard};
 
 /// A convenient alias for `Gc<RefCell<T>>`.
 /// Note that `Gc<RefCell<T>>` has additional specialized methods for working with `RefCell`s inside
@@ -199,3 +203,63 @@ pub fn run_with_gc_cleanup<T, F: FnOnce() -> T>(f: F) -> T {
 
     res
 }
+
+// Re-export the Scan derive, at the bottom cause the documentation is long
+/// The `Scan` derive, powering `#[derive(Scan)]`. Important details here!
+///
+/// Doing `#[derive(Scan)]` will in fact derive `Scan`. However, it actually can auto-implement
+/// four traits:
+/// - `Scan`   (automatic) [requires all fields be `Scan`]
+/// - `GcSafe` (automatic) [requires all fields be `GcSafe`]
+/// - `GcDrop` (opt-out)   [requires all fields be `GcDrop`]
+/// - `GcDeref`(opt-in)    [requires all fields be `GcDeref`]
+///
+/// `Scan` and `GcSafe` are the fundamental things that this derive implements. There is no way
+/// to opt out.
+///
+/// To opt out of `GcDrop`, supply the `cant_drop` flag. Ex:
+/// ```
+/// use shredder::DerefGc;
+/// use shredder::Scan;
+///
+/// #[derive(Scan)]
+/// #[shredder(cant_drop)]
+/// struct WontBeDrop {
+///     v: DerefGc<u32>
+/// }
+/// ```
+///
+/// To opt into `GcDeref`, supply the `can_deref` flag:
+/// ```
+/// use shredder::DerefGc;
+/// use shredder::Scan;
+///
+/// #[derive(Scan)]
+/// #[shredder(can_deref, cant_drop)]
+/// struct WillBeDeref {
+///     v: DerefGc<u32>
+/// }
+/// ```
+///
+/// Now there are also field flags, which will remove the recursive checks for that trait:
+/// - `skip_scan` (skips check for `Scan`)
+/// - `unsafe_skip_gc_deref` (skips check for `GcDeref`. Unsafe!)
+/// - `unsafe_skip_gc_drop` (skips check for `GcDrop`. Unsafe!)
+/// - `unsafe_skip_gc_safe` (skips check for `GcSafe`. Unsafe!)
+/// - `unsafe_skip_all` (skips check for all traits. Unsafe!)
+///
+/// For safety, if you use unsafe flags, you must ensure those fields satisfy the trait requirements
+/// anyway.
+///
+/// Here is an example of skip usage
+/// ```
+/// use shredder::DerefGc;
+/// use shredder::Scan;
+///
+/// #[derive(Scan)]
+/// struct WillBeDeref {
+///     #[shredder(skip_scan, unsafe_skip_gc_safe, unsafe_skip_gc_drop)]
+///     v: *const u32 // Assume this is always a valid ptr
+/// }
+/// ```
+pub use shredder_derive::Scan;
