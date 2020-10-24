@@ -1,3 +1,4 @@
+use std::any::{Any, TypeId};
 use std::borrow::Borrow;
 use std::cell::{BorrowError, BorrowMutError, RefCell};
 use std::cmp::Ordering;
@@ -141,6 +142,34 @@ impl<T: Scan + ?Sized> Gc<T> {
 
     pub(crate) fn internal_handle_ref(&self) -> &InternalGcRef {
         &self.backing_handle
+    }
+}
+
+#[allow(clippy::use_self)]
+impl<T: Scan + ?Sized> Gc<T> {
+    /// Attempt to `downcast` this `Gc<T>` to a `Gc<S>`
+    ///
+    /// For implementation reasons this returns a new `Gc<T>` on success
+    /// On failure (if there was not an `S` in the `Gc<T>`) then `None` is returned
+    #[must_use]
+    pub fn downcast<S>(&self) -> Option<Gc<S>>
+    where
+        T: Any + 'static,
+        S: Scan + Any + 'static,
+    {
+        let gc_guard = self.get();
+        let ptr: &T = gc_guard.deref();
+
+        if ptr.type_id() == TypeId::of::<S>() {
+            let new_handle = COLLECTOR.clone_handle(&self.backing_handle);
+
+            Some(Gc {
+                backing_handle: new_handle,
+                direct_ptr: self.direct_ptr as *const S,
+            })
+        } else {
+            None
+        }
     }
 }
 

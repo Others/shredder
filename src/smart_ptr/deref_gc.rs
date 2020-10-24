@@ -1,14 +1,16 @@
-use std::ops::Deref;
 #[cfg(feature = "nightly-features")]
 use std::{marker::Unsize, ops::CoerceUnsized};
 
 use crate::collector::{InternalGcRef, COLLECTOR};
 use crate::marker::{GcDeref, GcDrop, GcSafe};
 use crate::{Finalize, Scan, Scanner, ToScan};
+
+use std::any::{Any, TypeId};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 
 /// A `Gc`, but with the ability to `Deref` to its contents!
 ///
@@ -89,6 +91,33 @@ impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
+        }
+    }
+}
+
+#[allow(clippy::use_self)]
+impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
+    /// Attempt to `downcast` this `DerefGc<T>` to a `DerefGc<S>`
+    ///
+    /// For implementation reasons this returns a new `DerefGc<T>` on success
+    /// On failure (if there was not an `S` in the `DerefGc<T>`) then `None` is returned
+    #[must_use]
+    pub fn downcast<S>(&self) -> Option<DerefGc<S>>
+    where
+        T: Any + 'static,
+        S: Scan + GcDeref + Any + 'static,
+    {
+        let ptr: &T = self.deref();
+
+        if ptr.type_id() == TypeId::of::<S>() {
+            let new_handle = COLLECTOR.clone_handle(&self.backing_handle);
+
+            Some(DerefGc {
+                backing_handle: new_handle,
+                direct_ptr: self.direct_ptr as *const S,
+            })
+        } else {
+            None
         }
     }
 }
