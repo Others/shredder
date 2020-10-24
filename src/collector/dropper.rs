@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::spawn;
 
-use crossbeam::{SendError, Sender};
+use crossbeam::channel::{self, SendError, Sender};
 use parking_lot::RwLock;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
@@ -23,7 +23,7 @@ pub(crate) enum DropMessage {
 
 impl BackgroundDropper {
     pub fn new() -> Self {
-        let (sender, receiver) = crossbeam::unbounded();
+        let (sender, receiver) = channel::unbounded();
 
         // The drop thread deals with doing all the Drops this collector needs to do
         spawn(move || {

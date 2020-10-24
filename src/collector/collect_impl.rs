@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use crossbeam::deque::Injector;
 use crossbeam::queue::SegQueue;
-use dynqueue::DynQueue;
+use dynqueue::IntoDynQueue;
 use parking_lot::{MutexGuard, RwLock};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -79,7 +79,7 @@ impl Collector {
 
         // This step is dfs through the object graph (starting with the roots)
         // We mark each object we find
-        let dfs_stack = DynQueue::new(roots);
+        let dfs_stack = roots.into_dyn_queue();
         dfs_stack
             .into_par_iter()
             .for_each(|(queue, handle)| unsafe {

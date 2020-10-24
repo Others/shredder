@@ -170,7 +170,7 @@ impl<T> ChunkedLinkedList<T> {
 
     pub fn insert(&self, v: Arc<T>) -> CLLItem<T> {
         loop {
-            if let Ok(idx) = self.free_entries.pop() {
+            if let Some(idx) = self.free_entries.pop() {
                 let chunk = unsafe { &*idx.0 };
                 let slot = &chunk.values[idx.1];
 
