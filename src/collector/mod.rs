@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::spawn;
 
-use crossbeam::Sender;
+use crossbeam::channel::{self, Sender};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
@@ -88,7 +88,7 @@ struct TrackedData {
 
 impl Collector {
     fn new() -> Arc<Self> {
-        let (async_gc_notifier, async_gc_receiver) = crossbeam::bounded(1);
+        let (async_gc_notifier, async_gc_receiver) = channel::bounded(1);
 
         let res = Arc::new(Self {
             gc_lock: Mutex::default(),
@@ -274,7 +274,7 @@ impl Collector {
         // We send a channel to the drop thread and wait for it to respond
         // This has the effect of synchronizing this thread with the drop thread
 
-        let (sender, receiver) = crossbeam::bounded(1);
+        let (sender, receiver) = channel::bounded(1);
         let drop_msg = DropMessage::SyncUp(sender);
         {
             self.dropper

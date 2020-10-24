@@ -14,8 +14,8 @@ edition = "2018"
 
 [dependencies]
 arc-swap = "0.4.7"
-crossbeam = "0.7.3"
-dynqueue = { version = "0.1.3", features = ["crossbeam-queue"] }
+crossbeam = "0.8.0"
+dynqueue = { version = "0.3.0", features = ["crossbeam-queue"] }
 log = "0.4.8"
 once_cell = "1.4"
 parking_lot = "0.11.0"
