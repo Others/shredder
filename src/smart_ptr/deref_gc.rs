@@ -3,7 +3,7 @@ use std::prelude::v1::*;
 #[cfg(feature = "nightly-features")]
 use std::{marker::Unsize, ops::CoerceUnsized};
 
-use crate::collector::{InternalGcRef, COLLECTOR};
+use crate::collector::{get_collector, InternalGcRef};
 use crate::marker::{GcDeref, GcDrop, GcSafe};
 use crate::{Finalize, Scan, Scanner, ToScan};
 
@@ -37,7 +37,7 @@ impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
     where
         T: Sized + GcDrop,
     {
-        let (handle, ptr) = COLLECTOR.track_with_drop(v);
+        let (handle, ptr) = get_collector().track_with_drop(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
@@ -53,7 +53,7 @@ impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
     where
         T: Sized,
     {
-        let (handle, ptr) = COLLECTOR.track_with_no_drop(v);
+        let (handle, ptr) = get_collector().track_with_no_drop(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
@@ -73,7 +73,7 @@ impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
     where
         T: Sized + Finalize,
     {
-        let (handle, ptr) = COLLECTOR.track_with_finalization(v);
+        let (handle, ptr) = get_collector().track_with_finalization(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
@@ -89,7 +89,7 @@ impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
     where
         T: ToScan + GcDrop,
     {
-        let (handle, ptr) = COLLECTOR.track_boxed_value(v);
+        let (handle, ptr) = get_collector().track_boxed_value(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
@@ -112,7 +112,7 @@ impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
         let ptr: &T = self.deref();
 
         if ptr.type_id() == TypeId::of::<S>() {
-            let new_handle = COLLECTOR.clone_handle(&self.backing_handle);
+            let new_handle = get_collector().clone_handle(&self.backing_handle);
 
             Some(DerefGc {
                 backing_handle: new_handle,
@@ -146,7 +146,7 @@ unsafe impl<T: Scan + GcDeref + ?Sized> Scan for DerefGc<T> {
 
 impl<T: Scan + GcDeref + ?Sized> Clone for DerefGc<T> {
     fn clone(&self) -> Self {
-        let new_handle = COLLECTOR.clone_handle(&self.backing_handle);
+        let new_handle = get_collector().clone_handle(&self.backing_handle);
 
         Self {
             backing_handle: new_handle,

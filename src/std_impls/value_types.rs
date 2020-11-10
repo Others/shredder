@@ -1,7 +1,12 @@
+#[cfg(feature = "std")]
 use std::collections::hash_map::RandomState;
+
 use std::prelude::v1::*;
 use std::ptr::drop_in_place;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+#[cfg(feature = "std")]
+use std::time::Instant;
 
 macro_rules! sync_value_type {
     ($t: ty) => {
@@ -39,15 +44,20 @@ sync_value_type!(f32);
 sync_value_type!(f64);
 
 sync_value_type!(String);
+
+#[cfg(feature = "std")]
 sync_value_type!(Instant);
+
 sync_value_type!(Duration);
 
+#[cfg(feature = "std")]
 sync_value_type!(RandomState);
 
 #[cfg(test)]
 mod test {
     use std::mem::forget;
     use std::prelude::v1::*;
+    #[cfg(feature = "std")]
     use std::time::Instant;
 
     use crate::Finalize;
@@ -90,5 +100,6 @@ mod test {
     test_no_panic_finalize!(f64, 1.0);
 
     test_no_panic_finalize!(String, String::from("hello"));
+    #[cfg(feature = "std")]
     test_no_panic_finalize!(Instant, Instant::now());
 }

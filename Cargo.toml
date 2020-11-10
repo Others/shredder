@@ -39,6 +39,7 @@ trybuild = "1.0"
 #debug = true
 
 [features]
-default = [ "std" ] # Default to using the std
+default = [ "std", "threads" ] # Default to using the std
 std = [ "no-std-compat/std" ]
+threads = []
 nightly-features = []

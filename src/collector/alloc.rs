@@ -1,5 +1,7 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::mem::{self, ManuallyDrop};
+
+#[cfg(feature = "std")]
 use std::panic::UnwindSafe;
 use std::prelude::v1::*;
 use std::ptr;
@@ -28,6 +30,7 @@ pub enum DeallocationAction {
 // It also, by contract of Scan, cannot have a Drop method that is unsafe in any thead
 unsafe impl Send for GcAllocation {}
 // Therefore, GcDataPtr is also UnwindSafe in the context we need it to be
+#[cfg(feature = "std")]
 impl UnwindSafe for GcAllocation {}
 // We use the lockout to ensure that `GcDataPtr`s are not shared
 unsafe impl Sync for GcAllocation {}

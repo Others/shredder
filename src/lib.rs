@@ -39,7 +39,8 @@
     clippy::cast_precision_loss,     // There is no way to avoid this precision loss
     clippy::explicit_deref_methods,  // Sometimes calling `deref` directly is clearer
     clippy::module_name_repetitions, // Sometimes clear naming calls for repetition
-    clippy::multiple_crate_versions  // There is no way to easily fix this without modifying our dependencies
+    clippy::multiple_crate_versions,  // There is no way to easily fix this without modifying our dependencies
+    clippy::wildcard_imports, // No-std compatibility layer requieres these for ergonomics
 )]
 #![no_std]
 
@@ -75,7 +76,10 @@ use std::sync::{Mutex, RwLock};
 
 use std::prelude::v1::*;
 
-use crate::collector::COLLECTOR;
+use crate::collector::get_collector;
+
+#[cfg(not(feature = "threads"))]
+pub use crate::collector::initialize_threading;
 
 pub use crate::finalize::Finalize;
 pub use crate::r::{RMut, R};
@@ -108,7 +112,7 @@ pub type GRwLock<T> = Gc<RwLock<T>>;
 /// ```
 #[must_use]
 pub fn number_of_tracked_allocations() -> usize {
-    COLLECTOR.tracked_data_count()
+    get_collector().tracked_data_count()
 }
 
 /// Returns how many `Gc`s are currently in use.
@@ -122,7 +126,7 @@ pub fn number_of_tracked_allocations() -> usize {
 /// ```
 #[must_use]
 pub fn number_of_active_handles() -> usize {
-    COLLECTOR.handle_count()
+    get_collector().handle_count()
 }
 
 /// Sets the percent more data that'll trigger collection.
@@ -147,7 +151,7 @@ pub fn set_gc_trigger_percent(percent: f32) {
             percent
         )
     }
-    COLLECTOR.set_gc_trigger_percent(percent)
+    get_collector().set_gc_trigger_percent(percent)
 }
 
 /// A function for manually running a collection, ignoring the heuristic that governs normal
@@ -164,7 +168,7 @@ pub fn set_gc_trigger_percent(percent: f32) {
 /// collect(); // Manually run GC
 /// ```
 pub fn collect() {
-    COLLECTOR.collect();
+    get_collector().collect();
 }
 
 /// Block the current thread until the background thread has finished running the destructors for
@@ -184,7 +188,7 @@ pub fn collect() {
 /// // At this point all destructors for garbage will have been run
 /// ```
 pub fn synchronize_destructors() {
-    COLLECTOR.synchronize_destructors()
+    get_collector().synchronize_destructors()
 }
 
 /// A convenience method for helping ensure your destructors are run.

@@ -1,9 +1,9 @@
 use std::prelude::v1::*;
 
+#[cfg(feature = "std")]
 use std::panic::catch_unwind;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread::spawn;
 
 use crossbeam::channel::{self, SendError, Sender};
 use parking_lot::RwLock;
@@ -24,11 +24,15 @@ pub(crate) enum DropMessage {
 }
 
 impl BackgroundDropper {
-    pub fn new() -> Self {
+    pub fn new<F>(spawn: &'static F) -> Self
+    where
+        F: Fn(Box<dyn Fn() + Send>),
+        F: Sized,
+    {
         let (sender, receiver) = channel::unbounded();
 
         // The drop thread deals with doing all the Drops this collector needs to do
-        spawn(move || {
+        spawn(Box::new(move || {
             // An Err value means the stream will never recover
             while let Ok(drop_msg) = receiver.recv() {
                 match drop_msg {
@@ -44,12 +48,26 @@ impl BackgroundDropper {
                         // Then run the drops if needed
                         to_drop.par_iter().for_each(|data| {
                             let underlying_allocation = data.underlying_allocation;
-                            let res = catch_unwind(move || unsafe {
-                                underlying_allocation.deallocate();
-                            });
-                            if let Err(e) = res {
-                                eprintln!("Gc background drop failed: {:?}", e);
+
+                            // When the stdlib is available, we can use catch_unwind
+                            // to protect ourselves against panics that unwind.
+                            #[cfg(feature = "std")]
+                            {
+                                let res = catch_unwind(move || unsafe {
+                                    underlying_allocation.deallocate();
+                                });
+                                if let Err(e) = res {
+                                    eprintln!("Gc background drop failed: {:?}", e);
+                                }
                             }
+
+                            // When it is not available, however, panics probably
+                            // won't unwind, and there's no safe means to catch
+                            // a panic.
+                            //
+                            // TODO is there a better way to safely handle this?
+                            #[cfg(not(feature = "std"))]
+                            underlying_allocation.deallocate();
                         });
                     }
                     DropMessage::SyncUp(responder) => {
@@ -59,7 +77,7 @@ impl BackgroundDropper {
                     }
                 }
             }
-        });
+        }));
 
         Self { sender }
     }

@@ -5,7 +5,7 @@ use std::ptr::drop_in_place;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;
 
-use crate::collector::{GcData, InternalGcRef, COLLECTOR};
+use crate::collector::{get_collector, GcData, InternalGcRef};
 use crate::marker::{GcDeref, GcSafe};
 use crate::{Finalize, Gc, Scan, Scanner};
 
@@ -48,7 +48,7 @@ impl<T: Scan> AtomicGc<T> {
 
         Self {
             atomic_ptr: atomic_ptr.clone(),
-            backing_handle: COLLECTOR.new_handle_for_atomic(atomic_ptr),
+            backing_handle: get_collector().new_handle_for_atomic(atomic_ptr),
             _mark: PhantomData,
         }
     }
@@ -65,7 +65,8 @@ impl<T: Scan> AtomicGc<T> {
         let ptr;
         let internal_handle;
         {
-            let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
+            let _collector = get_collector();
+            let _collection_blocker = _collector.get_collection_blocker_spinlock();
 
             // Safe to manipulate this ptr only because we have the `_collection_blocker`
             // (And we know this `Arc` still has a pointer in the collector data structures,
@@ -80,7 +81,7 @@ impl<T: Scan> AtomicGc<T> {
             mem::forget(gc_data_temp);
 
             ptr = new_gc_data_ref.scan_ptr().cast();
-            internal_handle = COLLECTOR.handle_from_data(new_gc_data_ref);
+            internal_handle = get_collector().handle_from_data(new_gc_data_ref);
         }
 
         Gc::new_raw(internal_handle, ptr)
@@ -97,7 +98,8 @@ impl<T: Scan> AtomicGc<T> {
         let raw_data_ptr = Arc::as_ptr(data);
 
         {
-            let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
+            let collector = get_collector();
+            let _collection_blocker = collector.get_collection_blocker_spinlock();
 
             // Safe to manipulate this ptr only because we have the `_collection_blocker`
             // (And we know this `Arc` still has a pointer in the collector data structures,
@@ -121,7 +123,8 @@ impl<T: Scan> AtomicGc<T> {
         let ptr;
         let internal_handle;
         {
-            let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
+            let collector = get_collector();
+            let _collection_blocker = collector.get_collection_blocker_spinlock();
             let old_data_ptr = self.atomic_ptr.swap(raw_data_ptr as _, ordering);
 
             // Safe to manipulate this ptr only because we have the `_collection_blocker`
@@ -133,7 +136,7 @@ impl<T: Scan> AtomicGc<T> {
             mem::forget(old_data_arc);
 
             ptr = gc_data.scan_ptr().cast();
-            internal_handle = COLLECTOR.handle_from_data(gc_data);
+            internal_handle = get_collector().handle_from_data(gc_data);
         }
 
         Gc::new_raw(internal_handle, ptr)
@@ -165,7 +168,8 @@ impl<T: Scan> AtomicGc<T> {
 
         let compare_res;
         {
-            let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
+            let collector = get_collector();
+            let _collection_blocker = collector.get_collection_blocker_spinlock();
             // Safe to manipulate this ptr only because we have the `_collection_blocker`
             // (And we know this `Arc` still has a pointer in the collector data structures,
             // otherwise someone would be accessing an `AtomicGc` pointing to freed data--which
@@ -209,7 +213,8 @@ impl<T: Scan> AtomicGc<T> {
 
         let compare_res;
         {
-            let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
+            let collector = get_collector();
+            let _collection_blocker = collector.get_collection_blocker_spinlock();
             // Safe to manipulate this ptr only because we have the `_collection_blocker`
             // (And we know this `Arc` still has a pointer in the collector data structures,
             // otherwise someone would be accessing an `AtomicGc` pointing to freed data--which
