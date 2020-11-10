@@ -1,5 +1,6 @@
 use crate::collector::InternalGcRef;
 use crate::marker::GcSafe;
+use std::prelude::v1::*;
 
 /// A trait capturing the ability of data to be scanned for references to data in a `Gc`.
 ///

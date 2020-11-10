@@ -1,3 +1,5 @@
+use std::prelude::v1::*;
+
 use std::panic::catch_unwind;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;

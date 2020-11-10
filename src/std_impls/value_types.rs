@@ -1,4 +1,5 @@
 use std::collections::hash_map::RandomState;
+use std::prelude::v1::*;
 use std::ptr::drop_in_place;
 use std::time::{Duration, Instant};
 
@@ -46,6 +47,7 @@ sync_value_type!(RandomState);
 #[cfg(test)]
 mod test {
     use std::mem::forget;
+    use std::prelude::v1::*;
     use std::time::Instant;
 
     use crate::Finalize;

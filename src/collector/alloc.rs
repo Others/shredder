@@ -1,6 +1,7 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::mem::{self, ManuallyDrop};
 use std::panic::UnwindSafe;
+use std::prelude::v1::*;
 use std::ptr;
 
 use crate::collector::InternalGcRef;

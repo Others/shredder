@@ -26,6 +26,10 @@ shredder_derive = { git = "https://github.com/Others/shredder_derive.git" }
 #shredder_derive = { path = "../shredder_derive" }
 stable_deref_trait = "1.1"
 
+[dependencies.no-std-compat]
+version = "0.4.1"
+features = [ "alloc", "compat_hash", "compat_sync", "compat_macros" ]
+
 [dev-dependencies]
 paste = "1.0"
 rand = "0.7.3"
@@ -35,5 +39,6 @@ trybuild = "1.0"
 #debug = true
 
 [features]
-default = []
+default = [ "std" ] # Default to using the std
+std = [ "no-std-compat/std" ]
 nightly-features = []

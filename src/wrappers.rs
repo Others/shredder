@@ -1,6 +1,7 @@
 use std::cell::{BorrowError, BorrowMutError, RefCell};
 use std::fmt::{self, Debug, Formatter};
 use std::ops::{Deref, DerefMut};
+use std::prelude::v1::*;
 use std::sync::{self, TryLockError};
 
 use crate::{GcGuard, Scan};

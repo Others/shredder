@@ -1,3 +1,5 @@
+use std::prelude::v1::*;
+
 #[cfg(feature = "nightly-features")]
 use std::{marker::Unsize, ops::CoerceUnsized};
 

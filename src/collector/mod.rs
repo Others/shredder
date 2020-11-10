@@ -1,3 +1,4 @@
+use std::prelude::v1::*;
 mod alloc;
 mod collect_impl;
 mod data;

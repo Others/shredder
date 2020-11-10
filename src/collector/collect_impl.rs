@@ -1,3 +1,4 @@
+use std::prelude::v1::*;
 use std::sync::atomic::Ordering;
 
 use crossbeam::deque::Injector;

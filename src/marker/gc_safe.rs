@@ -1,5 +1,6 @@
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
+use std::prelude::v1::*;
 
 /// A marker trait that marks that data can be scanned in the background by the garbage collector.
 ///

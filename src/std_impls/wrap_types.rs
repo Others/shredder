@@ -1,5 +1,6 @@
 use crate::marker::{GcDeref, GcDrop, GcSafe};
 use crate::{Finalize, Scan, Scanner};
+use std::prelude::v1::*;
 
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex, RwLock, TryLockError};

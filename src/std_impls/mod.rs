@@ -7,6 +7,7 @@ mod wrap_types;
 mod test {
     use std::cell::Cell;
     use std::panic::catch_unwind;
+    use std::prelude::v1::*;
     use std::sync::{Mutex, RwLock};
 
     use crate::collector::{get_mock_handle, InternalGcRef};

@@ -1,4 +1,5 @@
 use parking_lot::Mutex;
+use std::prelude::v1::*;
 
 // TODO(issue): https://github.com/Others/shredder/issues/8
 const DEFAULT_ALLOCATION_TRIGGER_PERCENT: f32 = 0.75;
