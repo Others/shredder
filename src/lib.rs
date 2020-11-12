@@ -46,6 +46,7 @@
 
 extern crate no_std_compat as std;
 
+#[cfg(feature = "std")]
 #[macro_use]
 extern crate crossbeam;
 
@@ -76,10 +77,7 @@ use std::sync::{Mutex, RwLock};
 
 use std::prelude::v1::*;
 
-use crate::collector::get_collector;
-
-#[cfg(not(feature = "threads"))]
-pub use crate::collector::initialize_threading;
+use crate::collector::COLLECTOR;
 
 pub use crate::finalize::Finalize;
 pub use crate::r::{RMut, R};
@@ -112,7 +110,7 @@ pub type GRwLock<T> = Gc<RwLock<T>>;
 /// ```
 #[must_use]
 pub fn number_of_tracked_allocations() -> usize {
-    get_collector().tracked_data_count()
+    COLLECTOR.tracked_data_count()
 }
 
 /// Returns how many `Gc`s are currently in use.
@@ -126,7 +124,7 @@ pub fn number_of_tracked_allocations() -> usize {
 /// ```
 #[must_use]
 pub fn number_of_active_handles() -> usize {
-    get_collector().handle_count()
+    COLLECTOR.handle_count()
 }
 
 /// Sets the percent more data that'll trigger collection.
@@ -151,7 +149,7 @@ pub fn set_gc_trigger_percent(percent: f32) {
             percent
         )
     }
-    get_collector().set_gc_trigger_percent(percent)
+    COLLECTOR.set_gc_trigger_percent(percent)
 }
 
 /// A function for manually running a collection, ignoring the heuristic that governs normal
@@ -168,7 +166,7 @@ pub fn set_gc_trigger_percent(percent: f32) {
 /// collect(); // Manually run GC
 /// ```
 pub fn collect() {
-    get_collector().collect();
+    COLLECTOR.collect();
 }
 
 /// Block the current thread until the background thread has finished running the destructors for
@@ -188,7 +186,7 @@ pub fn collect() {
 /// // At this point all destructors for garbage will have been run
 /// ```
 pub fn synchronize_destructors() {
-    get_collector().synchronize_destructors()
+    COLLECTOR.synchronize_destructors()
 }
 
 /// A convenience method for helping ensure your destructors are run.

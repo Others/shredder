@@ -13,7 +13,7 @@ use std::{marker::Unsize, ops::CoerceUnsized};
 
 use stable_deref_trait::StableDeref;
 
-use crate::collector::{get_collector, GcGuardWarrant, InternalGcRef};
+use crate::collector::{GcGuardWarrant, InternalGcRef, COLLECTOR};
 use crate::marker::{GcDeref, GcDrop, GcSafe};
 use crate::wrappers::{
     GcMutexGuard, GcPoisonError, GcRef, GcRefMut, GcRwLockReadGuard, GcRwLockWriteGuard,
@@ -46,7 +46,7 @@ impl<T: Scan + ?Sized> Gc<T> {
     where
         T: Sized + GcDrop,
     {
-        let (handle, ptr) = get_collector().track_with_drop(v);
+        let (handle, ptr) = COLLECTOR.track_with_drop(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
@@ -62,7 +62,7 @@ impl<T: Scan + ?Sized> Gc<T> {
     where
         T: Sized,
     {
-        let (handle, ptr) = get_collector().track_with_no_drop(v);
+        let (handle, ptr) = COLLECTOR.track_with_no_drop(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
@@ -85,7 +85,7 @@ impl<T: Scan + ?Sized> Gc<T> {
     where
         T: Sized + Finalize,
     {
-        let (handle, ptr) = get_collector().track_with_finalization(v);
+        let (handle, ptr) = COLLECTOR.track_with_finalization(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
@@ -101,7 +101,7 @@ impl<T: Scan + ?Sized> Gc<T> {
     where
         T: ToScan + GcDrop,
     {
-        let (handle, ptr) = get_collector().track_boxed_value(v);
+        let (handle, ptr) = COLLECTOR.track_boxed_value(v);
         Self {
             backing_handle: handle,
             direct_ptr: ptr,
@@ -124,7 +124,7 @@ impl<T: Scan + ?Sized> Gc<T> {
     /// If you wish to avoid this, consider `GcDeref` as an alternative.
     #[must_use]
     pub fn get(&self) -> GcGuard<'_, T> {
-        let warrant = get_collector().get_data_warrant(&self.backing_handle);
+        let warrant = COLLECTOR.get_data_warrant(&self.backing_handle);
         GcGuard {
             gc_ptr: self,
             _warrant: warrant,
@@ -162,7 +162,7 @@ impl<T: Scan + ?Sized> Gc<T> {
         let ptr: &T = gc_guard.deref();
 
         if ptr.type_id() == TypeId::of::<S>() {
-            let new_handle = get_collector().clone_handle(&self.backing_handle);
+            let new_handle = COLLECTOR.clone_handle(&self.backing_handle);
 
             Some(Gc {
                 backing_handle: new_handle,
@@ -177,7 +177,7 @@ impl<T: Scan + ?Sized> Gc<T> {
 impl<T: Scan + ?Sized> Clone for Gc<T> {
     #[must_use]
     fn clone(&self) -> Self {
-        let new_handle = get_collector().clone_handle(&self.backing_handle);
+        let new_handle = COLLECTOR.clone_handle(&self.backing_handle);
 
         Self {
             backing_handle: new_handle,

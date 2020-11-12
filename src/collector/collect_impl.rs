@@ -146,9 +146,7 @@ impl Collector {
 
         // Send off the data to be dropped in the background
         let drop_msg = DropMessage::DataToDrop(to_drop);
-        if let Err(e) = self.dropper.send_msg(drop_msg) {
-            error!("Error sending to drop thread {}", e);
-        }
+        self.drop(drop_msg);
 
         // update the trigger based on the new baseline
         self.trigger

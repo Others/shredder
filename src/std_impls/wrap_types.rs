@@ -73,12 +73,18 @@ unsafe impl<T: Scan + ?Sized> Scan for Mutex<T> {
 }
 
 unsafe impl<T: Finalize + ?Sized> Finalize for Mutex<T> {
+    #[cfg(feature = "std")]
     unsafe fn finalize(&mut self) {
         let v = self.get_mut();
         match v {
             Ok(v) => v.finalize(),
             Err(e) => e.into_inner().finalize(),
         }
+    }
+
+    #[cfg(not(feature = "std"))]
+    unsafe fn finalize(&mut self) {
+        self.get_mut().finalize()
     }
 }
 
@@ -206,11 +212,17 @@ unsafe impl<T: Scan + ?Sized> Scan for RwLock<T> {
 }
 
 unsafe impl<T: Finalize + ?Sized> Finalize for RwLock<T> {
+    #[cfg(feature = "std")]
     unsafe fn finalize(&mut self) {
         let v = self.get_mut();
         match v {
             Ok(v) => v.finalize(),
             Err(e) => e.into_inner().finalize(),
         }
+    }
+
+    #[cfg(not(feature = "std"))]
+    unsafe fn finalize(&mut self) {
+        self.get_mut().finalize()
     }
 }

@@ -153,6 +153,7 @@ pub struct GcMutexGuard<'a, T: Scan + 'static> {
 
 impl<'a, T: Scan + 'static> GcMutexGuard<'a, T> {
     pub(crate) fn lock(g: GcGuard<'a, sync::Mutex<T>>) -> Result<Self, GcPoisonError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
         let internal_guard = gc_mutex_internals::GcMutexGuardInt::new(g, |g| {
             #[cfg(feature = "std")]
@@ -178,6 +179,7 @@ impl<'a, T: Scan + 'static> GcMutexGuard<'a, T> {
     }
 
     pub(crate) fn try_lock(g: GcGuard<'a, sync::Mutex<T>>) -> Result<Self, GcTryLockError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
         let internal_guard = gc_mutex_internals::GcMutexGuardInt::try_new(g, |g| {
             #[cfg(feature = "std")]
@@ -261,6 +263,7 @@ pub struct GcRwLockReadGuard<'a, T: Scan + 'static> {
 
 impl<'a, T: Scan + 'static> GcRwLockReadGuard<'a, T> {
     pub(crate) fn read(g: GcGuard<'a, sync::RwLock<T>>) -> Result<Self, GcPoisonError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
         let internal_guard = gc_rwlock_internals::GcRwLockReadGuardInternal::new(g, |g| {
             #[cfg(feature = "std")]
@@ -286,6 +289,7 @@ impl<'a, T: Scan + 'static> GcRwLockReadGuard<'a, T> {
     }
 
     pub(crate) fn try_read(g: GcGuard<'a, sync::RwLock<T>>) -> Result<Self, GcTryLockError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
 
         let internal_guard = gc_rwlock_internals::GcRwLockReadGuardInternal::try_new(g, |g| {
@@ -342,6 +346,7 @@ pub struct GcRwLockWriteGuard<'a, T: Scan + 'static> {
 
 impl<'a, T: Scan + 'static> GcRwLockWriteGuard<'a, T> {
     pub(crate) fn write(g: GcGuard<'a, sync::RwLock<T>>) -> Result<Self, GcPoisonError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
         let internal_guard = gc_rwlock_internals::GcRwLockWriteGuardInternal::new(g, |g| {
             #[cfg(feature = "std")]
@@ -367,6 +372,7 @@ impl<'a, T: Scan + 'static> GcRwLockWriteGuard<'a, T> {
     }
 
     pub(crate) fn try_write(g: GcGuard<'a, sync::RwLock<T>>) -> Result<Self, GcTryLockError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
         let internal_guard = gc_rwlock_internals::GcRwLockWriteGuardInternal::try_new(g, |g| {
             #[cfg(feature = "std")]

@@ -1,4 +1,5 @@
 use std::prelude::v1::*;
+
 mod alloc;
 mod collect_impl;
 mod data;
@@ -11,9 +12,10 @@ use std::sync::Arc;
 #[cfg(feature = "threads")]
 use std::thread::spawn;
 
-use once_cell::sync::OnceCell;
-
-use crossbeam::channel::{self, Sender};
+use crossbeam::channel;
+#[cfg(feature = "threads")]
+use crossbeam::channel::Sender;
+use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
 use crate::collector::alloc::GcAllocation;
@@ -40,7 +42,7 @@ impl InternalGcRef {
     }
 
     pub(crate) fn invalidate(&self) {
-        get_collector().drop_handle(self);
+        COLLECTOR.drop_handle(self);
     }
 
     pub(crate) fn data(&self) -> &Arc<GcData> {
@@ -72,6 +74,7 @@ pub struct Collector {
     /// we run automatic gc in a background thread
     /// sending to this channel indicates that thread should check the trigger, then collect if the
     /// trigger indicates it should
+    #[cfg(feature = "threads")]
     async_gc_notifier: Sender<()>,
     /// all the data we are managing plus metadata about what `Gc<T>`s exist
     tracked_data: TrackedData,
@@ -91,18 +94,16 @@ struct TrackedData {
 // TODO(issue): https://github.com/Others/shredder/issues/7
 
 impl Collector {
-    fn new<F>(spawn: &'static F) -> Arc<Self>
-    where
-        F: Fn(Box<dyn Fn() + Send>),
-        F: Sized,
-    {
+    fn new() -> Arc<Self> {
+        #[cfg(feature = "threads")]
         let (async_gc_notifier, async_gc_receiver) = channel::bounded(1);
 
         let res = Arc::new(Self {
             gc_lock: Mutex::default(),
             atomic_spinlock: AtomicProtectingSpinlock::default(),
             trigger: GcTrigger::default(),
-            dropper: BackgroundDropper::new(spawn),
+            dropper: BackgroundDropper::new(),
+            #[cfg(feature = "threads")]
             async_gc_notifier,
             tracked_data: TrackedData {
                 // This is janky, but we subtract one from the collection number
@@ -117,21 +118,31 @@ impl Collector {
             },
         });
 
-        // The async Gc thread deals with background Gc'ing
-        let async_collector_ref = Arc::downgrade(&res);
-        spawn(Box::new(move || {
-            // An Err value means the stream will never recover
-            while async_gc_receiver.recv().is_ok() {
-                if let Some(collector) = async_collector_ref.upgrade() {
-                    collector.check_then_collect();
+        #[cfg(feature = "threads")]
+        {
+            // The async Gc thread deals with background Gc'ing
+            let async_collector_ref = Arc::downgrade(&res);
+            spawn(move || {
+                // An Err value means the stream will never recover
+                while async_gc_receiver.recv().is_ok() {
+                    if let Some(collector) = async_collector_ref.upgrade() {
+                        collector.check_then_collect();
+                    }
                 }
-            }
-        }));
+            });
+        }
 
         res
     }
 
+    fn drop(&self, drop_msg: DropMessage) {
+        if let Err(e) = self.dropper.send_msg(drop_msg) {
+            error!("Error sending to drop thread {}", e);
+        }
+    }
+
     #[inline]
+    #[cfg(feature = "threads")]
     fn notify_async_gc_thread(&self) {
         // Note: We only send if there is room in the channel
         // If there's already a notification there the async thread is already notified
@@ -143,6 +154,12 @@ impl Collector {
             },
             default => (),
         };
+    }
+
+    #[inline]
+    #[cfg(not(feature = "threads"))]
+    fn notify_async_gc_thread(&self) {
+        self.check_then_collect();
     }
 
     pub fn track_with_drop<T: Scan + GcDrop>(&self, data: T) -> (InternalGcRef, *const T) {
@@ -326,31 +343,7 @@ impl Collector {
     }
 }
 
-static COLLECTOR: OnceCell<Arc<Collector>> = OnceCell::new();
-
-#[cfg(not(feature = "threads"))]
-pub fn initialize_threading<F>(spawn: &'static F)
-where
-    F: Fn(Box<dyn Fn() + Send>),
-{
-    COLLECTOR.set(Collector::new(spawn));
-}
-
-#[cfg(feature = "threads")]
-pub fn get_collector() -> Arc<Collector> {
-    COLLECTOR
-        .get_or_init(|| {
-            Collector::new(&|e| {
-                spawn(e);
-            })
-        })
-        .clone()
-}
-
-#[cfg(not(feature = "threads"))]
-pub fn get_collector() -> Arc<Collector> {
-    *(COLLECTOR.get().expect("Attempted to use Gc without calling shredder::initialize_threading or using the threads from stdlib"))
-}
+pub static COLLECTOR: Lazy<Arc<Collector>> = Lazy::new(Collector::new);
 
 #[cfg(test)]
 pub(crate) fn get_mock_handle() -> InternalGcRef {
