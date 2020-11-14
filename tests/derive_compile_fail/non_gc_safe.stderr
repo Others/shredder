@@ -1,12 +1,12 @@
-error[E0277]: the trait bound `NotGcSafe: shredder::marker::GcSafe` is not satisfied
+error[E0277]: the trait bound `NotGcSafe: GcSafe` is not satisfied
   --> $DIR/non_gc_safe.rs:9:10
    |
 9  | #[derive(Scan)]
-   |          ^^^^ the trait `shredder::marker::GcSafe` is not implemented for `NotGcSafe`
+   |          ^^^^ the trait `GcSafe` is not implemented for `NotGcSafe`
    |
   ::: $WORKSPACE/src/plumbing.rs
    |
    | pub fn check_gc_safe<T: GcSafe>(_: &T) {}
-   |                         ------ required by this bound in `shredder::plumbing::check_gc_safe`
+   |                         ------ required by this bound in `check_gc_safe`
    |
    = note: this error originates in a derive macro (in Nightly builds, run with -Z macro-backtrace for more info)

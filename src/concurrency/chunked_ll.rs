@@ -150,16 +150,21 @@ impl<T> ChunkedLinkedList<T> {
                 next: old_head,
             }));
 
-            let res = self
-                .head
-                .compare_and_swap(old_head, new_head, Ordering::Relaxed);
-            if res == old_head {
+            let compare_res = self.head.compare_exchange(
+                old_head,
+                new_head,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+
+            if compare_res.is_ok() {
                 break;
-            } else {
-                // Get rid of that memory we allocated
-                unsafe {
-                    Box::from_raw(new_head);
-                }
+            }
+
+            // Get rid of that memory we allocated (in this case we failed to use it)
+            // TODO: Just write over it instead of deallocating it
+            unsafe {
+                Box::from_raw(new_head);
             }
         }
 
@@ -168,6 +173,7 @@ impl<T> ChunkedLinkedList<T> {
         }
     }
 
+    #[allow(clippy::redundant_else)]
     pub fn insert(&self, v: Arc<T>) -> CLLItem<T> {
         loop {
             if let Some(idx) = self.free_entries.pop() {

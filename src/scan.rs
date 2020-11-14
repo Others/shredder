@@ -124,10 +124,12 @@ impl<'a> Scanner<'a> {
     }
 
     /// Scan a piece of data, tracking any `Gc`s found
+    #[inline]
     pub fn scan<T: Scan + ?Sized>(&mut self, from: &T) {
         from.scan(self);
     }
 
+    #[inline]
     pub(crate) fn add_internal_handle(&mut self, gc_ref: InternalGcRef) {
         (self.scan_callback)(gc_ref);
     }

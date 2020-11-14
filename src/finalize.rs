@@ -12,6 +12,8 @@
 /// anything that contains a `AtomicGc` or `DerefGc`.) In those cases you will need to use
 /// `Finalize` to write destructors, and promise not touch fields of those types.
 ///
+/// You probably want to use `#[derive(Finalize)]` to implement this :)
+///
 /// # Safety
 /// When implementing this trait you're promising a few things:
 ///
@@ -38,4 +40,22 @@ pub unsafe trait Finalize {
     /// may not even drop this object! You must `mem::forget` it or otherwise force its destructor
     /// not to run.
     unsafe fn finalize(&mut self);
+}
+
+/// A trait that lets you finalize all fields of a piece of data
+///
+/// This is useful for implementing `Finalize` itself, since it gives you a simple way to
+/// recursively finalize the fields.
+///
+/// You probably want to use `#[derive(FinalizeFields)]` to implement this :)
+///
+/// # Safety
+/// Implementing this has the same rules as implementing `Finalize`
+pub unsafe trait FinalizeFields {
+    /// Do cleanup on this data's fields, potentially leaving it in an invalid state.
+    ///
+    /// # Safety
+    /// After calling this method, you may not access anything contained in this data. You may not
+    /// even drop this object! You must `mem::forget` it or otherwise force its destructor not to run.
+    unsafe fn finalize_fields(&mut self);
 }

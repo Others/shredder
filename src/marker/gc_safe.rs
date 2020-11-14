@@ -8,11 +8,16 @@ use std::ops::{Deref, DerefMut};
 ///     the data.
 ///  2) It is safe for `scan` to be called on this data, even if the lifetime of this data has
 ///     ended.
+///  3) It is safe for `finalize` to be called on this data, even if it's been transported to
+///     an arbitrary thread.
 ///
 /// Importantly if a type is `Send + 'static`, then it is always `GcSafe`
 ///
 /// NOTE: `GcSafe` cannot simply be `Send + 'static`, since `Gc` is always `GcSafe` but sometimes is
 /// not `Send` or `'static`
+///
+/// META NOTE: This trait exists to abstract over shredder's "Send like" requirements. This has
+/// benefits, but it is awkward how implementing it makes promises about other traits.
 pub unsafe trait GcSafe {}
 
 /// `GcSafeWrapper` wraps a piece of data to make it `GcSafe`

@@ -6,15 +6,15 @@ error[E0277]: the trait bound `NotScan: shredder::Scan` is not satisfied
   |
   = note: this error originates in a derive macro (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `NotScan: shredder::marker::GcDrop` is not satisfied
+error[E0277]: the trait bound `NotScan: GcDrop` is not satisfied
   --> $DIR/non_scan.rs:7:10
    |
 7  | #[derive(Scan)]
-   |          ^^^^ the trait `shredder::marker::GcDrop` is not implemented for `NotScan`
+   |          ^^^^ the trait `GcDrop` is not implemented for `NotScan`
    |
   ::: $WORKSPACE/src/plumbing.rs
    |
    | pub fn check_gc_drop<T: GcDrop>(_: &T) {}
-   |                         ------ required by this bound in `shredder::plumbing::check_gc_drop`
+   |                         ------ required by this bound in `check_gc_drop`
    |
    = note: this error originates in a derive macro (in Nightly builds, run with -Z macro-backtrace for more info)

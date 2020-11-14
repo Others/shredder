@@ -27,12 +27,15 @@ impl AtomicProtectingSpinlock {
             // We can only take an exclusive lock if the tracker zero (see self.tracker docs)
             if current_value == 0 {
                 // Compare and swap to put the sentinel value in place
-                let prev = self
-                    .tracker
-                    .compare_and_swap(0, SENTINEL_VALUE, Ordering::Acquire);
+                let swap_res = self.tracker.compare_exchange(
+                    0,
+                    SENTINEL_VALUE,
+                    Ordering::Acquire,
+                    Ordering::Acquire,
+                );
 
                 // If we succeeded then we can return the guard, which will clean up after itself
-                if prev == 0 {
+                if swap_res.is_ok() {
                     return APSExclusiveGuard { parent: self };
                 }
             }
