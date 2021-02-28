@@ -14,6 +14,7 @@ of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
 `shredder` has the following features:
 - safe: detects error conditions on the fly, and protects you from undefined behavior
 - ergonomic: no need to manually manage roots, just a regular smart pointer
+- deref support: `DerefGc` gives you a garbage collected and `Deref` smart pointer where possible
 - ready for fearless concurrency: works in multi-threaded contexts
 - limited stop-the world: regular processing will rarely be interrupted
 - seamless destruction: regular `drop` for `'static` data
@@ -22,11 +23,10 @@ of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
 - concurrent destruction: destructors are run in the background, improving performance
 
 `shredder` has the following limitations:
-- guarded access: accessing `Gc` data requires acquiring a guard
+- guarded access: accessing `Gc` data requires acquiring a guard (although you can use `DerefGc` in many cases to avoid this)
 - multiple collectors: only a single global collector is supported
 - can't handle `Rc`/`Arc`: requires all `Gc` objects have straightforward ownership semantics
-- optimized for speed, not memory use: `Gc` is small, but internal data-structures can grow large (will fix!)
-- further parallelization: The collector needs to be optimized and parallelized further (will fix!)
+- collection optimized for speed, not memory use: `Gc` and internal metadata is small, but there is bloat during collection (will fix!)
 - no no-std support: The collector requires threading and other `std` features (will fix!)
 
 Getting Started

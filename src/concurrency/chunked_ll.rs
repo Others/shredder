@@ -150,14 +150,14 @@ impl<T> ChunkedLinkedList<T> {
                 next: old_head,
             }));
 
-            let compare_res = self.head.compare_exchange(
+            let swap_result = self.head.compare_exchange(
                 old_head,
                 new_head,
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             );
 
-            if compare_res.is_ok() {
+            if swap_result.is_ok() {
                 break;
             }
 

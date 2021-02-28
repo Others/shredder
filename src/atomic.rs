@@ -207,19 +207,19 @@ impl<T: Scan> AtomicGc<T> {
         let new_data = new.internal_handle_ref().data();
         let new_data_raw = Arc::as_ptr(new_data) as _;
 
-        let compare_res;
+        let swap_result;
         {
             let _collection_blocker = COLLECTOR.get_collection_blocker_spinlock();
             // Safe to manipulate this ptr only because we have the `_collection_blocker`
             // (And we know this `Arc` still has a pointer in the collector data structures,
             // otherwise someone would be accessing an `AtomicGc` pointing to freed data--which
             // is impossible in safe code.)
-            compare_res =
+            swap_result =
                 self.atomic_ptr
                     .compare_exchange(guess_data_raw, new_data_raw, success, failure);
         }
 
-        compare_res.is_ok()
+        swap_result.is_ok()
     }
 
     // TODO: Compare and swap/compare and exchange that return the current value
