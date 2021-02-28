@@ -150,6 +150,7 @@ impl<T: Scan> AtomicGc<T> {
     /// Returns `true` if the swap happened and this `AtomicGc` now points to `new`
     /// Returns `false` if the swap failed / this `AtomicGc` was not pointing to `current`
     #[allow(clippy::must_use_candidate)]
+    #[allow(deprecated)]
     pub fn compare_and_swap(&self, current: &Gc<T>, new: &Gc<T>, ordering: Ordering) -> bool {
         // Ensure we're not storing dead data...
         new.assert_live();

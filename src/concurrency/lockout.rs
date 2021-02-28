@@ -32,12 +32,13 @@ impl Lockout {
 
         // Fast path, where the count is not SIGNPOSTED
         if starting_count != EXCLUSIVE_SIGNPOST {
-            let prev_value = lockout.count.compare_and_swap(
+            let exchange_result = lockout.count.compare_exchange(
                 starting_count,
                 starting_count + 1,
                 Ordering::SeqCst,
+                Ordering::SeqCst,
             );
-            if prev_value == starting_count {
+            if exchange_result.is_ok() {
                 return Warrant { provider };
             }
         }
@@ -50,10 +51,13 @@ impl Lockout {
             if value == EXCLUSIVE_SIGNPOST {
                 lockout.lockout_condvar.wait(&mut guard);
             } else {
-                let prev_value = lockout
-                    .count
-                    .compare_and_swap(value, value + 1, Ordering::SeqCst);
-                if prev_value == value {
+                let compare_result = lockout.count.compare_exchange(
+                    value,
+                    value + 1,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
+                if compare_result.is_ok() {
                     // Dropping the guard early is fine, the warrant has already been taken
                     drop(guard);
 
@@ -66,11 +70,14 @@ impl Lockout {
     pub fn get_exclusive_warrant<P: LockoutProvider>(provider: P) -> Option<ExclusiveWarrant<P>> {
         let lockout = provider.provide();
 
-        let prev_value = lockout
-            .count
-            .compare_and_swap(0, EXCLUSIVE_SIGNPOST, Ordering::SeqCst);
+        let swap_res = lockout.count.compare_exchange(
+            0,
+            EXCLUSIVE_SIGNPOST,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
 
-        if prev_value == 0 {
+        if swap_res.is_ok() {
             Some(ExclusiveWarrant { provider })
         } else {
             None
@@ -90,10 +97,13 @@ impl<P: LockoutProvider> Drop for Warrant<P> {
 
             let count = lockout.count.load(Ordering::SeqCst);
             assert!(count > 0 && count != EXCLUSIVE_SIGNPOST);
-            let prev_value = lockout
-                .count
-                .compare_and_swap(count, count - 1, Ordering::SeqCst);
-            if prev_value == count {
+            let compare_result = lockout.count.compare_exchange(
+                count,
+                count - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+            if compare_result.is_ok() {
                 return;
             }
         }
@@ -110,10 +120,13 @@ impl<P: LockoutProvider> Drop for ExclusiveWarrant<P> {
         let lockout = self.provider.provide();
 
         let _guard = lockout.lockout_mutex.lock();
-        let prev_count = lockout
-            .count
-            .compare_and_swap(EXCLUSIVE_SIGNPOST, 0, Ordering::SeqCst);
-        assert_eq!(prev_count, EXCLUSIVE_SIGNPOST);
+        let swap_res = lockout.count.compare_exchange(
+            EXCLUSIVE_SIGNPOST,
+            0,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        assert!(swap_res.is_ok());
         lockout.lockout_condvar.notify_all();
     }
 }
