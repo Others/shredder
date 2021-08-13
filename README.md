@@ -15,7 +15,7 @@ of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
 - safe: detects error conditions on the fly, and protects you from undefined behavior
 - ergonomic: no need to manually manage roots, just a regular smart pointer
 - deref support: `DerefGc` gives you a garbage collected and `Deref` smart pointer where possible
-- ready for fearless concurrency: works in multi-threaded contexts
+- ready for fearless concurrency: works in multi-threaded contexts, with `AtomicGc` for cases where you need atomic operations
 - limited stop-the world: regular processing will rarely be interrupted
 - seamless destruction: regular `drop` for `'static` data
 - clean finalization: optional `finalize` for non-`'static` data

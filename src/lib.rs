@@ -8,7 +8,7 @@
 //! - safe: detects error conditions on the fly, and protects you from undefined behavior
 //! - ergonomic: no need to manually manage roots, just a regular smart pointer
 //! - deref support: `DerefGc` gives you a garbage collected and `Deref` smart pointer where possible
-//! - ready for fearless concurrency: works in multi-threaded contexts
+//! - ready for fearless concurrency: works in multi-threaded contexts, with `AtomicGc` for cases where you need atomic operations
 //! - limited stop-the world: regular processing will rarely be interrupted
 //! - seamless destruction: regular `drop` for `'static` data
 //! - clean finalization: optional `finalize` for non-`'static` data
@@ -123,7 +123,7 @@ pub fn number_of_active_handles() -> usize {
 
 /// Sets the percent more data that'll trigger collection.
 ///
-/// `shredders` collection automatically triggers when:
+/// `shredder`'s collection automatically triggers when:
 /// ```text
 ///     allocations > allocations_after_last_collection * (1 + gc_trigger_percent)
 /// ```
