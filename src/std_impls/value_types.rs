@@ -2,6 +2,8 @@ use std::collections::hash_map::RandomState;
 use std::ptr::drop_in_place;
 use std::time::{Duration, Instant};
 
+/// mark as value type
+#[macro_export]
 macro_rules! sync_value_type {
     ($t: ty) => {
         unsafe impl crate::marker::GcDeref for $t {}
@@ -20,6 +22,7 @@ macro_rules! sync_value_type {
     };
 }
 
+sync_value_type!(());
 sync_value_type!(bool);
 
 sync_value_type!(u8);
