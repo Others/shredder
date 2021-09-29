@@ -1,76 +1,13 @@
 use crate::marker::{GcDeref, GcDrop, GcSafe};
 use crate::{Finalize, Scan, Scanner};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+// all 7 types in `std::collections` have been implemented
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::BuildHasher;
 use std::mem::forget;
 use std::ptr::read;
 
 // For pretty much all simple collections, the collection inherets the properites of what it contains
 // (with respect to GcDeref, GcDrop and GcSafe)
-
-// BTREEMAP
-unsafe impl<K, V> GcDeref for BTreeMap<K, V>
-where
-    K: GcDeref,
-    V: GcDeref,
-{
-}
-unsafe impl<K, V> GcDrop for BTreeMap<K, V>
-where
-    K: GcDrop,
-    V: GcDrop,
-{
-}
-unsafe impl<K, V> GcSafe for BTreeMap<K, V>
-where
-    K: GcSafe,
-    V: GcSafe,
-{
-}
-
-unsafe impl<K: Scan, V: Scan> Scan for BTreeMap<K, V> {
-    #[inline]
-    fn scan(&self, scanner: &mut Scanner<'_>) {
-        for (k, v) in self {
-            scanner.scan(k);
-            scanner.scan(v);
-        }
-    }
-}
-
-unsafe impl<K: Finalize, V: Finalize> Finalize for BTreeMap<K, V> {
-    unsafe fn finalize(&mut self) {
-        let map = read(self);
-        for mut e in map {
-            e.finalize();
-            forget(e);
-        }
-    }
-}
-
-// BTREESET
-unsafe impl<T> GcDeref for BTreeSet<T> where T: GcDeref {}
-unsafe impl<T> GcDrop for BTreeSet<T> where T: GcDrop {}
-unsafe impl<T> GcSafe for BTreeSet<T> where T: GcSafe {}
-
-unsafe impl<T: Scan> Scan for BTreeSet<T> {
-    #[inline]
-    fn scan(&self, scanner: &mut Scanner<'_>) {
-        for e in self {
-            scanner.scan(e)
-        }
-    }
-}
-
-unsafe impl<T: Finalize> Finalize for BTreeSet<T> {
-    unsafe fn finalize(&mut self) {
-        let set = read(self);
-        for mut e in set {
-            e.finalize();
-            forget(e);
-        }
-    }
-}
 
 // HASHMAP
 unsafe impl<K, V, S: BuildHasher> GcDeref for HashMap<K, V, S>
@@ -80,6 +17,7 @@ where
     S: GcDeref,
 {
 }
+
 unsafe impl<K, V, S: BuildHasher> GcDrop for HashMap<K, V, S>
 where
     K: GcDrop,
@@ -87,6 +25,7 @@ where
     S: GcDrop,
 {
 }
+
 unsafe impl<K, V, S: BuildHasher> GcSafe for HashMap<K, V, S>
 where
     K: GcSafe,
@@ -122,12 +61,14 @@ where
     S: GcDeref,
 {
 }
+
 unsafe impl<T, S: BuildHasher> GcDrop for HashSet<T, S>
 where
     T: GcDrop,
     S: GcDrop,
 {
 }
+
 unsafe impl<T, S: BuildHasher> GcSafe for HashSet<T, S>
 where
     T: GcSafe,
@@ -154,64 +95,140 @@ unsafe impl<T: Finalize, S: BuildHasher> Finalize for HashSet<T, S> {
     }
 }
 
-// TUPLES
-unsafe impl<A, B> GcDeref for (A, B)
-where
-    A: GcDeref,
-    B: GcDeref,
-{
-}
-unsafe impl<A, B> GcDrop for (A, B)
-where
-    A: GcDrop,
-    B: GcDrop,
-{
-}
-unsafe impl<A, B> GcSafe for (A, B)
-where
-    A: GcSafe,
-    B: GcSafe,
-{
-}
+// Vec like structure means that it implemented `Iter<T>`
+macro_rules! sync_vec_like {
+    ($t:ty) => {
+        unsafe impl<T> GcDeref for $t where T: GcDeref {}
+        unsafe impl<T> GcDrop for $t where T: GcDrop {}
+        unsafe impl<T> GcSafe for $t where T: GcSafe {}
 
-unsafe impl<A: Scan, B: Scan> Scan for (A, B) {
-    #[inline]
-    fn scan(&self, scanner: &mut Scanner<'_>) {
-        self.0.scan(scanner);
-        self.1.scan(scanner);
-    }
-}
-
-unsafe impl<A: Finalize, B: Finalize> Finalize for (A, B) {
-    unsafe fn finalize(&mut self) {
-        let (mut a, mut b) = read(self);
-        a.finalize();
-        b.finalize();
-        forget(a);
-        forget(b);
-    }
-}
-
-// VEC
-unsafe impl<T> GcDeref for Vec<T> where T: GcDeref {}
-unsafe impl<T> GcDrop for Vec<T> where T: GcDrop {}
-unsafe impl<T> GcSafe for Vec<T> where T: GcSafe {}
-
-unsafe impl<T: Scan> Scan for Vec<T> {
-    #[inline]
-    fn scan(&self, scanner: &mut Scanner<'_>) {
-        for e in self {
-            scanner.scan(e)
+        unsafe impl<T: Scan> Scan for $t {
+            #[inline]
+            fn scan(&self, scanner: &mut Scanner<'_>) {
+                for e in self {
+                    scanner.scan(e)
+                }
+            }
         }
+
+        unsafe impl<T: Finalize> Finalize for $t {
+            unsafe fn finalize(&mut self) {
+                let set = read(self);
+                for mut e in set {
+                    e.finalize();
+                    forget(e);
+                }
+            }
+        }
+    };
+    {$($t:ty,)*} => {
+        $(sync_vec_like!($t);)*
+    };
+    {$($t:ty), *} => {
+        sync_vec_like!($($t,)*);
+    };
+}
+
+sync_vec_like![
+    Vec<T>,
+    VecDeque<T>, // avoid format
+    LinkedList<T>,
+    BTreeSet<T>,
+    BinaryHeap<T>,
+];
+
+// Map like structure means that it implemented `Iter<K, V>`
+macro_rules! sync_map_like {
+    ($t:ty) => {
+        unsafe impl<K, V> GcDeref for $t where K: GcDeref, V: GcDeref { }
+        unsafe impl<K, V> GcDrop for $t where K: GcDrop, V: GcDrop { }
+        unsafe impl<K, V> GcSafe for $t where K: GcSafe, V: GcSafe { }
+
+        unsafe impl<K: Scan, V: Scan> Scan for $t {
+            #[inline]
+            fn scan(&self, scanner: &mut Scanner<'_>) {
+                for (k, v) in self {
+                    scanner.scan(k);
+                    scanner.scan(v);
+                }
+            }
+        }
+
+        unsafe impl<K: Finalize, V: Finalize> Finalize for $t {
+            unsafe fn finalize(&mut self) {
+                let map = read(self);
+                for mut e in map {
+                    e.finalize();
+                    forget(e);
+                }
+            }
+        }
+    };
+    {$($t:ty,)*} => {
+        $(sync_map_like!($t);)*
+    };
+    {$($t:ty), *} => {
+        sync_map_like!($($t,)*);
+    };
+}
+
+sync_map_like![
+    BTreeMap<K,V>  // avoid format
+];
+
+macro_rules! for_each_tuple_ {
+    ($m:ident !!) => {
+        $m! { }
+    };
+    ($m:ident !! $h:ident, $($t:ident,)*) => {
+        $m! { $h $($t)* }
+        for_each_tuple_! { $m !! $($t,)* }
     }
 }
 
-unsafe impl<T: Finalize> Finalize for Vec<T> {
-    unsafe fn finalize(&mut self) {
-        let set = read(self);
-        for mut e in set {
-            e.finalize();
-            forget(e);
-        }
-    }
+macro_rules! for_each_tuple {
+    ($m:ident) => {
+        for_each_tuple_! { $m !! A, B, C, D, E, F, G, H, I, J, K, L, M, N, }
+    };
 }
+
+// The definition of this macro refers to `libcore`, if there is any improvement, please synchronize.
+// See: https://github.com/rust-lang/rust/blob/8f5b5f94dcdb9884737dfbc8efd893d1d70f0b14/src/libcore/hash/mod.rs#L239-L271
+macro_rules! sync_tuple {
+    // The primitive type unit `()` is a value type
+    // which has been implemented in `/std_impls/value_types`
+    () => (
+        // unsafe impl GcDeref for () {};
+        // unsafe impl GcDrop for () {};
+        // unsafe impl GcSafe for () {};
+        // unsafe impl Scan for () {};
+        // unsafe impl Finalize for () {};
+    );
+
+    ($($name:ident)+) => (
+        unsafe impl<$($name: GcDeref),*> GcDeref for ($($name,)*) {}
+        unsafe impl<$($name: GcDrop),*> GcDrop for ($($name,)*) {}
+        unsafe impl<$($name: GcSafe),*> GcSafe for ($($name,)*) {}
+
+        unsafe impl<$($name: Scan),*> Scan for ($($name,)*) {
+            #[inline]
+            #[allow(non_snake_case)]
+            fn scan(&self, scanner: &mut Scanner<'_>) {
+                let ($(ref $name,)*) = *self;
+                $($name.scan(scanner);)*
+            }
+        }
+
+        unsafe impl<$($name: Finalize),*> Finalize for ($($name,)*) {
+            #[allow(non_snake_case)]
+            unsafe fn finalize(&mut self) {
+                let ($(mut $name,)*) = read(self);
+                $($name.finalize();)*
+                $(forget($name);)*
+            }
+        }
+    );
+}
+
+// gc tuples up to 14, may enough
+for_each_tuple!(sync_tuple);

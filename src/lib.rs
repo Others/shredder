@@ -89,7 +89,7 @@ pub type GRefCell<T> = Gc<RefCell<T>>;
 pub type GMutex<T> = Gc<Mutex<T>>;
 
 /// A convenient alias for `Gc<RwLock<T>>`.
-/// Note that `Gc<Mutex<T>>` has additional specialized methods for working with `Mutex`s inside
+/// Note that `Gc<RwLock<T>>` has additional specialized methods for working with `RwLock`s inside
 /// `Gc`s.
 pub type GRwLock<T> = Gc<RwLock<T>>;
 
