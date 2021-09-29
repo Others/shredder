@@ -1,6 +1,6 @@
 use crate::marker::{GcDeref, GcDrop, GcSafe};
 use crate::{Finalize, Scan, Scanner};
-// all 7 types in `std::collections` has been implemented
+// all 7 types in `std::collections` have been implemented
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::BuildHasher;
 use std::mem::forget;
@@ -95,8 +95,7 @@ unsafe impl<T: Finalize, S: BuildHasher> Finalize for HashSet<T, S> {
     }
 }
 
-/// Vec like structure means that it implemented `Iter<T>`
-#[macro_export]
+// Vec like structure means that it implemented `Iter<T>`
 macro_rules! sync_vec_like {
     ($t:ty) => {
         unsafe impl<T> GcDeref for $t where T: GcDeref {}
@@ -138,8 +137,7 @@ sync_vec_like![
     BinaryHeap<T>,
 ];
 
-/// Map like structure means that it implemented `Iter<K, V>`
-#[macro_export]
+// Map like structure means that it implemented `Iter<K, V>`
 macro_rules! sync_map_like {
     ($t:ty) => {
         unsafe impl<K, V> GcDeref for $t where K: GcDeref, V: GcDeref { }
@@ -194,8 +192,11 @@ macro_rules! for_each_tuple {
     };
 }
 
+// The definition of this macro refers to `libcore`, if there is any improvement, please synchronize.
 // See: https://github.com/rust-lang/rust/blob/8f5b5f94dcdb9884737dfbc8efd893d1d70f0b14/src/libcore/hash/mod.rs#L239-L271
 macro_rules! sync_tuple {
+    // The primitive type unit `()` is a value type
+    // which has been implemented in `/std_impls/value_types`
     () => (
         // unsafe impl GcDeref for () {};
         // unsafe impl GcDrop for () {};
