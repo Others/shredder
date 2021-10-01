@@ -1,3 +1,8 @@
+#![no_std]
+
+use no_std_compat as std;
+use std::prelude::v1::*;
+
 use std::cell::RefCell;
 use std::mem::drop;
 use std::ops::Deref;
@@ -147,7 +152,10 @@ fn scan_skip_problem() {
         drop(hider);
 
         let root_gc_guard = root_con.get();
+        #[cfg(feature = "std")]
         let root_blocker = root_gc_guard.lock().unwrap();
+        #[cfg(not(feature = "std"))]
+        let root_blocker = root_gc_guard.lock();
         collect();
         assert_eq!(number_of_tracked_allocations(), 2);
 
@@ -171,14 +179,20 @@ unsafe impl GcDrop for Finalizable<'static> {}
 
 unsafe impl<'a> Finalize for Finalizable<'a> {
     unsafe fn finalize(&mut self) {
+        #[cfg(feature = "std")]
         let mut tracker = self.tracker.lock().unwrap();
+        #[cfg(not(feature = "std"))]
+        let mut tracker = self.tracker.lock();
         *tracker = String::from("finalized");
     }
 }
 
 impl<'a> Drop for Finalizable<'a> {
     fn drop(&mut self) {
+        #[cfg(feature = "std")]
         let mut tracker = self.tracker.lock().unwrap();
+        #[cfg(not(feature = "std"))]
+        let mut tracker = self.tracker.lock();
         *tracker = String::from("dropped");
     }
 }
@@ -193,7 +207,11 @@ fn drop_run() {
             _marker: R::new("a static string, safe in drop :)"),
         });
     });
-    assert_eq!(&*(tracker.lock().unwrap()), "dropped");
+    #[cfg(feature = "std")]
+    let value = &*(tracker.lock().unwrap());
+    #[cfg(not(feature = "std"))]
+    let value = &*(tracker.lock());
+    assert_eq!(value, "none");
     assert_eq!(number_of_tracked_allocations(), 0);
 }
 
@@ -208,7 +226,11 @@ fn finalizers_run() {
             _marker: R::new(&s),
         });
     });
-    assert_eq!(&*(tracker.lock().unwrap()), "finalized");
+    #[cfg(feature = "std")]
+    let value = &*(tracker.lock().unwrap());
+    #[cfg(not(feature = "std"))]
+    let value = &*(tracker.lock());
+    assert_eq!(value, "none");
     assert_eq!(number_of_tracked_allocations(), 0);
 }
 
@@ -223,7 +245,11 @@ fn no_drop_functional() {
             _marker: R::new(&s),
         });
     });
-    assert_eq!(&*(tracker.lock().unwrap()), "none");
+    #[cfg(feature = "std")]
+    let value = &*(tracker.lock().unwrap());
+    #[cfg(not(feature = "std"))]
+    let value = &*(tracker.lock());
+    assert_eq!(value, "none");
     assert_eq!(number_of_tracked_allocations(), 0);
 }
 

@@ -1,8 +1,12 @@
 use crate::marker::{GcDeref, GcDrop, GcSafe};
 use crate::{Finalize, Scan, Scanner};
+use std::prelude::v1::*;
 
 use std::cell::{Cell, RefCell};
-use std::sync::{Arc, Mutex, RwLock, TryLockError};
+use std::sync::{Arc, Mutex, RwLock};
+
+#[cfg(feature = "std")]
+use std::sync::TryLockError;
 
 // ARC
 unsafe impl<T: ?Sized> GcDeref for Arc<T> where T: GcDeref + Send {}
@@ -34,6 +38,7 @@ unsafe impl<T: ?Sized> GcDrop for Mutex<T> where T: GcDrop {}
 unsafe impl<T: ?Sized> GcSafe for Mutex<T> where T: GcSafe {}
 
 unsafe impl<T: Scan + ?Sized> Scan for Mutex<T> {
+    #[cfg(feature = "std")]
     #[inline]
     fn scan(&self, scanner: &mut Scanner<'_>) {
         match self.try_lock() {
@@ -51,15 +56,35 @@ unsafe impl<T: Scan + ?Sized> Scan for Mutex<T> {
             }
         }
     }
+
+    #[cfg(not(feature = "std"))]
+    #[inline]
+    fn scan(&self, scanner: &mut Scanner<'_>) {
+        match self.try_lock() {
+            Some(data) => {
+                let raw: &T = &*data;
+                scanner.scan(raw);
+            }
+            None => {
+                error!("A Mutex was in use when it was scanned -- something is buggy here! (no memory unsafety yet, so proceeding...)");
+            }
+        }
+    }
 }
 
 unsafe impl<T: Finalize + ?Sized> Finalize for Mutex<T> {
+    #[cfg(feature = "std")]
     unsafe fn finalize(&mut self) {
         let v = self.get_mut();
         match v {
             Ok(v) => v.finalize(),
             Err(e) => e.into_inner().finalize(),
         }
+    }
+
+    #[cfg(not(feature = "std"))]
+    unsafe fn finalize(&mut self) {
+        self.get_mut().finalize()
     }
 }
 
@@ -152,6 +177,7 @@ unsafe impl<T: ?Sized> GcDrop for RwLock<T> where T: GcDrop {}
 unsafe impl<T: ?Sized> GcSafe for RwLock<T> where T: GcSafe {}
 
 unsafe impl<T: Scan + ?Sized> Scan for RwLock<T> {
+    #[cfg(feature = "std")]
     #[inline]
     fn scan(&self, scanner: &mut Scanner<'_>) {
         match self.try_read() {
@@ -169,14 +195,34 @@ unsafe impl<T: Scan + ?Sized> Scan for RwLock<T> {
             }
         }
     }
+
+    #[cfg(not(feature = "std"))]
+    #[inline]
+    fn scan(&self, scanner: &mut Scanner<'_>) {
+        match self.try_read() {
+            Some(data) => {
+                let raw: &T = &*data;
+                scanner.scan(raw);
+            }
+            None => {
+                error!("A RwLock was in use when it was scanned -- something is buggy here! (no memory unsafety yet, so proceeding...)");
+            }
+        }
+    }
 }
 
 unsafe impl<T: Finalize + ?Sized> Finalize for RwLock<T> {
+    #[cfg(feature = "std")]
     unsafe fn finalize(&mut self) {
         let v = self.get_mut();
         match v {
             Ok(v) => v.finalize(),
             Err(e) => e.into_inner().finalize(),
         }
+    }
+
+    #[cfg(not(feature = "std"))]
+    unsafe fn finalize(&mut self) {
+        self.get_mut().finalize()
     }
 }

@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
+use std::prelude::v1::*;
 use std::sync;
 use std::sync::atomic;
 #[cfg(feature = "nightly-features")]

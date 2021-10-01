@@ -1,7 +1,11 @@
 use std::cell::{BorrowError, BorrowMutError, RefCell};
 use std::fmt::{self, Debug, Formatter};
 use std::ops::{Deref, DerefMut};
-use std::sync::{self, TryLockError};
+use std::prelude::v1::*;
+use std::sync;
+
+#[cfg(feature = "std")]
+use std::sync::TryLockError;
 
 use crate::{GcGuard, Scan};
 
@@ -149,13 +153,20 @@ pub struct GcMutexGuard<'a, T: Scan + 'static> {
 
 impl<'a, T: Scan + 'static> GcMutexGuard<'a, T> {
     pub(crate) fn lock(g: GcGuard<'a, sync::Mutex<T>>) -> Result<Self, GcPoisonError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
-        let internal_guard = gc_mutex_internals::GcMutexGuardInt::new(g, |g| match g.lock() {
-            Ok(v) => v,
-            Err(e) => {
-                was_poisoned = true;
-                e.into_inner()
+        let internal_guard = gc_mutex_internals::GcMutexGuardInt::new(g, |g| {
+            #[cfg(feature = "std")]
+            match g.lock() {
+                Ok(v) => v,
+                Err(e) => {
+                    was_poisoned = true;
+                    e.into_inner()
+                }
             }
+
+            #[cfg(not(feature = "std"))]
+            g.lock()
         });
 
         let guard = Self { internal_guard };
@@ -168,9 +179,11 @@ impl<'a, T: Scan + 'static> GcMutexGuard<'a, T> {
     }
 
     pub(crate) fn try_lock(g: GcGuard<'a, sync::Mutex<T>>) -> Result<Self, GcTryLockError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
-        let internal_guard =
-            gc_mutex_internals::GcMutexGuardInt::try_new(g, |g| match g.try_lock() {
+        let internal_guard = gc_mutex_internals::GcMutexGuardInt::try_new(g, |g| {
+            #[cfg(feature = "std")]
+            match g.try_lock() {
                 Ok(g) => Ok(g),
                 Err(TryLockError::Poisoned(e)) => {
                     was_poisoned = true;
@@ -179,8 +192,15 @@ impl<'a, T: Scan + 'static> GcMutexGuard<'a, T> {
                 Err(TryLockError::WouldBlock) => {
                     Err(GcTryLockError::<GcMutexGuard<'_, T>>::WouldBlock)
                 }
-            })
-            .map_err(|e| e.0)?;
+            }
+
+            #[cfg(not(feature = "std"))]
+            match g.try_lock() {
+                Some(g) => Ok(g),
+                None => Err(GcTryLockError::<GcMutexGuard<'_, T>>::WouldBlock),
+            }
+        })
+        .map_err(|e| e.0)?;
 
         let guard = GcMutexGuard { internal_guard };
 
@@ -243,15 +263,21 @@ pub struct GcRwLockReadGuard<'a, T: Scan + 'static> {
 
 impl<'a, T: Scan + 'static> GcRwLockReadGuard<'a, T> {
     pub(crate) fn read(g: GcGuard<'a, sync::RwLock<T>>) -> Result<Self, GcPoisonError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
-        let internal_guard =
-            gc_rwlock_internals::GcRwLockReadGuardInternal::new(g, |g| match g.read() {
+        let internal_guard = gc_rwlock_internals::GcRwLockReadGuardInternal::new(g, |g| {
+            #[cfg(feature = "std")]
+            match g.read() {
                 Ok(v) => v,
                 Err(e) => {
                     was_poisoned = true;
                     e.into_inner()
                 }
-            });
+            }
+
+            #[cfg(not(feature = "std"))]
+            g.read()
+        });
 
         let guard = Self { internal_guard };
 
@@ -263,10 +289,12 @@ impl<'a, T: Scan + 'static> GcRwLockReadGuard<'a, T> {
     }
 
     pub(crate) fn try_read(g: GcGuard<'a, sync::RwLock<T>>) -> Result<Self, GcTryLockError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
 
-        let internal_guard =
-            gc_rwlock_internals::GcRwLockReadGuardInternal::try_new(g, |g| match g.try_read() {
+        let internal_guard = gc_rwlock_internals::GcRwLockReadGuardInternal::try_new(g, |g| {
+            #[cfg(feature = "std")]
+            match g.try_read() {
                 Ok(g) => Ok(g),
                 Err(TryLockError::Poisoned(e)) => {
                     was_poisoned = true;
@@ -275,8 +303,15 @@ impl<'a, T: Scan + 'static> GcRwLockReadGuard<'a, T> {
                 Err(TryLockError::WouldBlock) => {
                     Err(GcTryLockError::<GcRwLockReadGuard<'_, T>>::WouldBlock)
                 }
-            })
-            .map_err(|e| e.0)?;
+            }
+
+            #[cfg(not(feature = "std"))]
+            match g.try_read() {
+                Some(g) => Ok(g),
+                None => Err(GcTryLockError::<GcRwLockReadGuard<'_, T>>::WouldBlock),
+            }
+        })
+        .map_err(|e| e.0)?;
 
         let guard = Self { internal_guard };
 
@@ -311,15 +346,21 @@ pub struct GcRwLockWriteGuard<'a, T: Scan + 'static> {
 
 impl<'a, T: Scan + 'static> GcRwLockWriteGuard<'a, T> {
     pub(crate) fn write(g: GcGuard<'a, sync::RwLock<T>>) -> Result<Self, GcPoisonError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
-        let internal_guard =
-            gc_rwlock_internals::GcRwLockWriteGuardInternal::new(g, |g| match g.write() {
+        let internal_guard = gc_rwlock_internals::GcRwLockWriteGuardInternal::new(g, |g| {
+            #[cfg(feature = "std")]
+            match g.write() {
                 Ok(v) => v,
                 Err(e) => {
                     was_poisoned = true;
                     e.into_inner()
                 }
-            });
+            }
+
+            #[cfg(not(feature = "std"))]
+            g.write()
+        });
 
         let guard = Self { internal_guard };
 
@@ -331,9 +372,11 @@ impl<'a, T: Scan + 'static> GcRwLockWriteGuard<'a, T> {
     }
 
     pub(crate) fn try_write(g: GcGuard<'a, sync::RwLock<T>>) -> Result<Self, GcTryLockError<Self>> {
+        #[allow(unused_mut)]
         let mut was_poisoned = false;
-        let internal_guard =
-            gc_rwlock_internals::GcRwLockWriteGuardInternal::try_new(g, |g| match g.try_write() {
+        let internal_guard = gc_rwlock_internals::GcRwLockWriteGuardInternal::try_new(g, |g| {
+            #[cfg(feature = "std")]
+            match g.try_write() {
                 Ok(g) => Ok(g),
                 Err(TryLockError::Poisoned(e)) => {
                     was_poisoned = true;
@@ -342,8 +385,15 @@ impl<'a, T: Scan + 'static> GcRwLockWriteGuard<'a, T> {
                 Err(TryLockError::WouldBlock) => {
                     Err(GcTryLockError::<GcRwLockWriteGuard<'_, T>>::WouldBlock)
                 }
-            })
-            .map_err(|e| e.0)?;
+            }
+
+            #[cfg(not(feature = "std"))]
+            match g.try_write() {
+                Some(g) => Ok(g),
+                None => Err(GcTryLockError::<GcRwLockWriteGuard<'_, T>>::WouldBlock),
+            }
+        })
+        .map_err(|e| e.0)?;
 
         let guard = GcRwLockWriteGuard { internal_guard };
 

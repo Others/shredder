@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
+use std::prelude::v1::*;
 
 use crate::marker::{GcDeref, GcDrop, GcSafe};
 use crate::{Finalize, Scan, Scanner};

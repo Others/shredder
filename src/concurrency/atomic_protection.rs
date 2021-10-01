@@ -1,4 +1,7 @@
+use std::prelude::v1::*;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(feature = "threads")]
 use std::thread::yield_now;
 
 const SENTINEL_VALUE: u64 = 1 << 60;
@@ -41,6 +44,10 @@ impl AtomicProtectingSpinlock {
             }
 
             // Try to be kind to our scheduler, even as we employ an anti-pattern
+            //
+            // Without threading support, we'll just have to busy-wait.
+            // Should we let the user supply a 'yield' function of their own?
+            #[cfg(feature = "threads")]
             yield_now()
         }
     }

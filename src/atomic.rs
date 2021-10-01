@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 use std::mem;
+use std::prelude::v1::*;
 use std::ptr::drop_in_place;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use std::sync::Arc;

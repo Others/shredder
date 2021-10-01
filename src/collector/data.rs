@@ -1,3 +1,4 @@
+use std::prelude::v1::*;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::Arc;
 

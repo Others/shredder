@@ -40,9 +40,14 @@
     clippy::cast_precision_loss,     // There is no way to avoid this precision loss
     clippy::explicit_deref_methods,  // Sometimes calling `deref` directly is clearer
     clippy::module_name_repetitions, // Sometimes clear naming calls for repetition
-    clippy::multiple_crate_versions  // There is no way to easily fix this without modifying our dependencies
+    clippy::multiple_crate_versions,  // There is no way to easily fix this without modifying our dependencies
+    clippy::wildcard_imports, // No-std compatibility layer requieres these for ergonomics
 )]
+#![no_std]
 
+extern crate no_std_compat as std;
+
+#[cfg(feature = "std")]
 #[macro_use]
 extern crate crossbeam;
 
@@ -70,6 +75,8 @@ pub mod wrappers;
 
 use std::cell::RefCell;
 use std::sync::{Mutex, RwLock};
+
+use std::prelude::v1::*;
 
 use crate::collector::COLLECTOR;
 

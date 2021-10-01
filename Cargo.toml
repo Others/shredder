@@ -26,6 +26,11 @@ shredder_derive = "0.2.0"
 #shredder_derive = { path = "../shredder_derive" }
 stable_deref_trait = "1.1"
 
+[dependencies.no-std-compat]
+# Waiting for stable version containing new `sync` version
+git = "https://gitlab.com/jD91mZM2/no-std-compat"
+features = [ "alloc", "compat_hash", "compat_sync", "compat_macros" ]
+
 [dev-dependencies]
 paste = "1.0"
 rand = "0.8.3"
@@ -35,5 +40,7 @@ trybuild = "1.0"
 #debug = true
 
 [features]
-default = []
+default = [ "std", "threads" ] # Default to using the std
+std = [ "no-std-compat/std" ]
+threads = [ "std" ]
 nightly-features = []

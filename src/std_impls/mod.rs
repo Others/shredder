@@ -6,7 +6,9 @@ mod wrap_types;
 #[cfg(test)]
 mod test {
     use std::cell::Cell;
+    #[cfg(feature = "std")]
     use std::panic::catch_unwind;
+    use std::prelude::v1::*;
     use std::sync::{Mutex, RwLock};
 
     use crate::collector::{get_mock_handle, InternalGcRef};
@@ -67,6 +69,7 @@ mod test {
         assert_eq!(count, 1);
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn poisoned_mutex_scans() {
         let m = Mutex::new(MockGc {
@@ -105,6 +108,7 @@ mod test {
         assert_eq!(count, 1);
     }
 
+    #[cfg(feature = "std")]
     #[test]
     fn poisoned_rwlock_scans() {
         let m = RwLock::new(MockGc {

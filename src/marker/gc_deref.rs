@@ -1,3 +1,5 @@
+use std::prelude::v1::*;
+
 /// A marker trait that marks that this data can be stored in a `DerefGc`
 ///
 /// `T` can be `GcDeref` only if it is deeply immutable through a `&T`. This is because it's

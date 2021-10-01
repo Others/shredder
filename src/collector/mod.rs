@@ -1,3 +1,5 @@
+use std::prelude::v1::*;
+
 mod alloc;
 mod collect_impl;
 mod data;
@@ -6,9 +8,13 @@ mod trigger;
 
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::Arc;
+
+#[cfg(feature = "threads")]
 use std::thread::spawn;
 
-use crossbeam::channel::{self, Sender};
+use crossbeam::channel;
+#[cfg(feature = "threads")]
+use crossbeam::channel::Sender;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 
@@ -68,6 +74,7 @@ pub struct Collector {
     /// we run automatic gc in a background thread
     /// sending to this channel indicates that thread should check the trigger, then collect if the
     /// trigger indicates it should
+    #[cfg(feature = "threads")]
     async_gc_notifier: Sender<()>,
     /// all the data we are managing plus metadata about what `Gc<T>`s exist
     tracked_data: TrackedData,
@@ -88,6 +95,7 @@ struct TrackedData {
 
 impl Collector {
     fn new() -> Arc<Self> {
+        #[cfg(feature = "threads")]
         let (async_gc_notifier, async_gc_receiver) = channel::bounded(1);
 
         let res = Arc::new(Self {
@@ -95,6 +103,7 @@ impl Collector {
             atomic_spinlock: AtomicProtectingSpinlock::default(),
             trigger: GcTrigger::default(),
             dropper: BackgroundDropper::new(),
+            #[cfg(feature = "threads")]
             async_gc_notifier,
             tracked_data: TrackedData {
                 // This is janky, but we subtract one from the collection number
@@ -109,21 +118,31 @@ impl Collector {
             },
         });
 
-        // The async Gc thread deals with background Gc'ing
-        let async_collector_ref = Arc::downgrade(&res);
-        spawn(move || {
-            // An Err value means the stream will never recover
-            while async_gc_receiver.recv().is_ok() {
-                if let Some(collector) = async_collector_ref.upgrade() {
-                    collector.check_then_collect();
+        #[cfg(feature = "threads")]
+        {
+            // The async Gc thread deals with background Gc'ing
+            let async_collector_ref = Arc::downgrade(&res);
+            spawn(move || {
+                // An Err value means the stream will never recover
+                while async_gc_receiver.recv().is_ok() {
+                    if let Some(collector) = async_collector_ref.upgrade() {
+                        collector.check_then_collect();
+                    }
                 }
-            }
-        });
+            });
+        }
 
         res
     }
 
+    fn drop(&self, drop_msg: DropMessage) {
+        if let Err(e) = self.dropper.send_msg(drop_msg) {
+            error!("Error sending to drop thread {}", e);
+        }
+    }
+
     #[inline]
+    #[cfg(feature = "threads")]
     fn notify_async_gc_thread(&self) {
         // Note: We only send if there is room in the channel
         // If there's already a notification there the async thread is already notified
@@ -135,6 +154,12 @@ impl Collector {
             },
             default => (),
         };
+    }
+
+    #[inline]
+    #[cfg(not(feature = "threads"))]
+    fn notify_async_gc_thread(&self) {
+        self.check_then_collect();
     }
 
     pub fn track_with_drop<T: Scan + GcDrop>(&self, data: T) -> (InternalGcRef, *const T) {
