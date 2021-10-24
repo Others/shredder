@@ -95,7 +95,6 @@ impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
     }
 }
 
-#[allow(clippy::use_self)]
 impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
     /// Attempt to `downcast` this `DerefGc<T>` to a `DerefGc<S>`
     ///

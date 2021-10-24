@@ -37,10 +37,9 @@ mod test {
 
     #[test]
     fn vec_scans_correctly() {
-        let mut v = Vec::new();
-        v.push(MockGc {
+        let v = vec![MockGc {
             handle: get_mock_handle(),
-        });
+        }];
 
         let mut count = 0;
         let mut scanner = Scanner::new(|_| {

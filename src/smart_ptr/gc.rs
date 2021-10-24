@@ -52,49 +52,6 @@ impl<T: Scan + ?Sized> Gc<T> {
         }
     }
 
-    /// Create a new `Gc`, initializing the value inside the `Gc` with a supplied closure. This
-    /// closure is given a self-referential `Gc`--so this function can be used to create
-    /// self-referential data.
-    ///
-    /// If the supplied self-referential `Gc` is accessed before the closure is complete, the
-    /// access will panic
-    pub fn new_circular<F>(f: F) -> Self
-    where
-        T: Sized + Finalize, // FIXME: Add a `GcDrop` variant
-        F: FnOnce(Self) -> T,
-    {
-        let (handle, ptr) = unsafe {
-            COLLECTOR.track_with_initializer(move |gc_ref, uninit_ptr: *const T| {
-                // Mark the data as deallocated, so the caller can't access it
-                gc_ref
-                    .data()
-                    .deallocated
-                    .store(true, atomic::Ordering::Relaxed);
-
-                // Create a Gc<T>
-                let gc = Self {
-                    backing_handle: gc_ref.clone(),
-                    direct_ptr: uninit_ptr,
-                };
-
-                let res = f(gc);
-
-                // Unmark the data as deallocated, so that things can proceed normally
-                gc_ref
-                    .data()
-                    .deallocated
-                    .store(false, atomic::Ordering::Relaxed);
-
-                res
-            })
-        };
-
-        Self {
-            backing_handle: handle,
-            direct_ptr: ptr,
-        }
-    }
-
     /// Create a new `Gc` containing the given data. (But specifying not to run its destructor.)
     /// This is useful because `T: GcDrop` is no longer necessary!
     ///
@@ -150,6 +107,94 @@ impl<T: Scan + ?Sized> Gc<T> {
         }
     }
 
+    /// Create a new `Gc`, initializing the value inside the `Gc` with a supplied closure.
+    ///
+    /// This closure is given a self-referential `Gc`--so this function can be used to create
+    /// self-referential data.
+    ///
+    /// If the supplied self-referential `Gc` is accessed before the closure is complete, the
+    /// access will panic
+    ///
+    /// Similar to `new` in that the supplied data's destructor will be run when the garbage
+    /// collector deallocates it.
+    pub fn new_cyclic<F>(f: F) -> Self
+    where
+        T: Sized + GcDrop,
+        F: FnOnce(Self) -> T,
+    {
+        let (handle, ptr) = unsafe {
+            COLLECTOR.track_with_initializer(move |gc_ref, uninit_ptr: *const T| {
+                // Mark the data as deallocated, so the caller can't access it
+                gc_ref
+                    .data()
+                    .deallocated
+                    .store(true, atomic::Ordering::Relaxed);
+
+                // Create a Gc<T>
+                let gc = Self {
+                    backing_handle: gc_ref.clone(),
+                    direct_ptr: uninit_ptr,
+                };
+
+                let res = f(gc);
+
+                // Unmark the data as deallocated, so that things can proceed normally
+                gc_ref
+                    .data()
+                    .deallocated
+                    .store(false, atomic::Ordering::Relaxed);
+
+                res
+            })
+        };
+
+        Self {
+            backing_handle: handle,
+            direct_ptr: ptr,
+        }
+    }
+
+    /// Create a new `Gc`, initializing the value inside the `Gc` with a supplied closure (But
+    /// specifying to call `finalize` on it instead of running its destructor.)
+    ///
+    /// See `new_cyclic` and `new_with_finalizer`
+    pub fn new_cyclic_with_finalizer<F>(f: F) -> Self
+    where
+        T: Sized + Finalize, // FIXME: Add a `GcDrop` variant
+        F: FnOnce(Self) -> T,
+    {
+        let (handle, ptr) = unsafe {
+            COLLECTOR.track_with_initializer_and_finalize(move |gc_ref, uninit_ptr: *const T| {
+                // Mark the data as deallocated, so the caller can't access it
+                gc_ref
+                    .data()
+                    .deallocated
+                    .store(true, atomic::Ordering::Relaxed);
+
+                // Create a Gc<T>
+                let gc = Self {
+                    backing_handle: gc_ref.clone(),
+                    direct_ptr: uninit_ptr,
+                };
+
+                let res = f(gc);
+
+                // Unmark the data as deallocated, so that things can proceed normally
+                gc_ref
+                    .data()
+                    .deallocated
+                    .store(false, atomic::Ordering::Relaxed);
+
+                res
+            })
+        };
+
+        Self {
+            backing_handle: handle,
+            direct_ptr: ptr,
+        }
+    }
+
     pub(crate) fn new_raw(backing_handle: InternalGcRef, direct_ptr: *const T) -> Self {
         Self {
             backing_handle,
@@ -188,7 +233,6 @@ impl<T: Scan + ?Sized> Gc<T> {
     }
 }
 
-#[allow(clippy::use_self)]
 impl<T: Scan + ?Sized> Gc<T> {
     /// Attempt to `downcast` this `Gc<T>` to a `Gc<S>`
     ///

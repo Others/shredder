@@ -172,6 +172,25 @@ impl Collector {
 
     pub unsafe fn track_with_initializer<T, F>(&self, init_function: F) -> (InternalGcRef, *const T)
     where
+        T: Scan + GcDrop,
+        F: FnOnce(InternalGcRef, *const T) -> T,
+    {
+        let (gc_data_ptr, uninit_ptr) = GcAllocation::allocate_uninitialized_with_drop();
+        let (token, reference) = self.setup_gc_reference(gc_data_ptr);
+
+        let t = init_function(self.clone_handle(&reference), uninit_ptr);
+        ptr::write(uninit_ptr as *mut T, t);
+        let init_ptr = uninit_ptr;
+
+        self.track_from_token(token);
+        (reference, init_ptr)
+    }
+
+    pub unsafe fn track_with_initializer_and_finalize<T, F>(
+        &self,
+        init_function: F,
+    ) -> (InternalGcRef, *const T)
+    where
         T: Finalize + Scan,
         F: FnOnce(InternalGcRef, *const T) -> T,
     {

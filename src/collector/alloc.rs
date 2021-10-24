@@ -54,7 +54,6 @@ impl GcAllocation {
         )
     }
 
-    #[allow(clippy::transmute_ptr_to_ptr)]
     pub fn allocate_with_finalization<'a, T: Scan + Finalize + 'a>(v: T) -> (Self, *const T) {
         let (scan_ptr, raw_ptr) = Self::raw_allocate(v);
 
@@ -70,6 +69,19 @@ impl GcAllocation {
                 deallocation_action: DeallocationAction::RunFinalizer { finalize_ptr },
             },
             raw_ptr,
+        )
+    }
+
+    /// This allocates a piece of data, but leaves it uninitialized for your pleasure
+    pub fn allocate_uninitialized_with_drop<T: Scan + GcDrop>() -> (Self, *const T) {
+        let (scan_ptr, data_ptr) = Self::raw_allocate_uninitialized::<T>();
+
+        (
+            Self {
+                scan_ptr,
+                deallocation_action: DeallocationAction::RunDrop,
+            },
+            data_ptr,
         )
     }
 
@@ -118,7 +130,6 @@ impl GcAllocation {
         (fat_ptr, data_ptr)
     }
 
-    #[allow(clippy::transmute_ptr_to_ptr)]
     fn raw_allocate<'a, T: Scan + 'a>(v: T) -> (*const dyn Scan, *const T) {
         // This is a straightforward use of alloc/write -- it should be undef free
         let data_ptr = unsafe {
