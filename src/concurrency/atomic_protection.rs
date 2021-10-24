@@ -6,7 +6,7 @@ const SENTINEL_VALUE: u64 = 1 << 60;
 pub struct AtomicProtectingSpinlock {
     /// tracks who is holding the spinlock
     /// if zero, no guards exists
-    /// if between zero and SENTINEL_VALUE, there are only inclusive guards
+    /// if between zero and SENTINEL_VALUE - 1, there are only inclusive guards
     /// if between SENTINEL_VALUE and u64::max, there is only a single exclusive guard
     tracker: AtomicU64,
 }

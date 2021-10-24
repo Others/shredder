@@ -29,6 +29,8 @@ pub unsafe trait GcSafe {}
 /// you need to use someone else's type which does not implement `GcSafe`.
 ///
 /// TODO: Remove this once overlapping marker traits are stabilized
+#[derive(Clone, Copy)]
+#[repr(transparent)]
 pub struct GcSafeWrapper<T> {
     /// The wrapped value
     pub v: T,
@@ -61,14 +63,6 @@ impl<T> GcSafeWrapper<T> {
         self.v
     }
 }
-
-impl<T: Send + Clone> Clone for GcSafeWrapper<T> {
-    fn clone(&self) -> Self {
-        Self { v: self.v.clone() }
-    }
-}
-
-impl<T: Send + Copy> Copy for GcSafeWrapper<T> {}
 
 impl<T: Send + Default> Default for GcSafeWrapper<T> {
     fn default() -> Self {

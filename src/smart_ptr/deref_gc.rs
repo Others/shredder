@@ -114,7 +114,7 @@ impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
 
             Some(DerefGc {
                 backing_handle: new_handle,
-                direct_ptr: self.direct_ptr as *const S,
+                direct_ptr: self.direct_ptr.cast(),
             })
         } else {
             None

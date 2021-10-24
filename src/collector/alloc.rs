@@ -55,10 +55,14 @@ impl GcAllocation {
     }
 
     #[allow(clippy::transmute_ptr_to_ptr)]
-    pub fn allocate_with_finalization<T: Scan + Finalize>(v: T) -> (Self, *const T) {
+    pub fn allocate_with_finalization<'a, T: Scan + Finalize + 'a>(v: T) -> (Self, *const T) {
         let (scan_ptr, raw_ptr) = Self::raw_allocate(v);
 
-        let finalize_ptr = unsafe { mem::transmute(raw_ptr as *const dyn Finalize) };
+        let finalize_ptr: *const (dyn Finalize + 'a) = unsafe { &*raw_ptr };
+
+        // Transmute away the lifetime of the pointer. This is safe, since finalize is an unsafe
+        // trait with requirements that it works after at deallocation time
+        let finalize_ptr: *const dyn Finalize = unsafe { mem::transmute(finalize_ptr) };
 
         (
             Self {
@@ -66,6 +70,26 @@ impl GcAllocation {
                 deallocation_action: DeallocationAction::RunFinalizer { finalize_ptr },
             },
             raw_ptr,
+        )
+    }
+
+    /// This allocates a piece of data, but leaves it uninitialized for your pleasure
+    pub fn allocate_uninitialized_with_finalization<'a, T: Scan + Finalize + 'a>(
+    ) -> (Self, *const T) {
+        let (scan_ptr, data_ptr) = Self::raw_allocate_uninitialized::<T>();
+
+        let finalize_ptr: *const (dyn Finalize + 'a) = unsafe { &*data_ptr };
+
+        // Transmute away the lifetime of the pointer. This is safe, since finalize is an unsafe
+        // trait with requirements that it works after at deallocation time
+        let finalize_ptr: *const dyn Finalize = unsafe { mem::transmute(finalize_ptr) };
+
+        (
+            Self {
+                scan_ptr,
+                deallocation_action: DeallocationAction::RunFinalizer { finalize_ptr },
+            },
+            data_ptr,
         )
     }
 
@@ -82,11 +106,23 @@ impl GcAllocation {
         )
     }
 
+    /// This allocates a nice old' piece of uninitialized memory. This is safe as long as you don't
+    /// access this uninitialized memory, or track the data before you initialize it.
+    fn raw_allocate_uninitialized<'a, T: Scan + 'a>() -> (*const dyn Scan, *const T) {
+        let data_ptr = unsafe { alloc(Layout::new::<T>()) as *const T };
+
+        let fat_ptr: *const (dyn Scan + 'a) = data_ptr;
+        // The contract of `Scan` ensures the `scan` method can be called after lifetimes end
+        let fat_ptr: *const dyn Scan = unsafe { mem::transmute(fat_ptr) };
+
+        (fat_ptr, data_ptr)
+    }
+
     #[allow(clippy::transmute_ptr_to_ptr)]
     fn raw_allocate<'a, T: Scan + 'a>(v: T) -> (*const dyn Scan, *const T) {
         // This is a straightforward use of alloc/write -- it should be undef free
         let data_ptr = unsafe {
-            let heap_space = alloc(Layout::new::<T>()) as *mut T;
+            let heap_space = alloc(Layout::new::<T>()).cast();
             ptr::write(heap_space, v);
             // NOTE: Write moves the data into the heap
 
