@@ -135,7 +135,7 @@ impl<T> ChunkedLinkedList<T> {
 
         Self {
             free_entries,
-            head: AtomicPtr::new(head as *mut _),
+            head: AtomicPtr::new(head.cast()),
             estimated_len: AtomicUsize::new(0),
         }
     }

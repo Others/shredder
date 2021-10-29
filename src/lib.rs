@@ -37,10 +37,12 @@
 )]
 // But I don't care about these ones
 #![allow(
+    clippy::semicolon_if_nothing_returned,
     clippy::cast_precision_loss,     // There is no way to avoid this precision loss
     clippy::explicit_deref_methods,  // Sometimes calling `deref` directly is clearer
     clippy::module_name_repetitions, // Sometimes clear naming calls for repetition
-    clippy::multiple_crate_versions  // There is no way to easily fix this without modifying our dependencies
+    clippy::multiple_crate_versions, // There is no way to easily fix this without modifying our dependencies
+    proc_macro_back_compat           // Hide this error until we have a path forward. FIXME: issue
 )]
 
 #[macro_use]
@@ -129,7 +131,9 @@ pub fn number_of_active_handles() -> usize {
 /// ```
 /// The default value of `gc_trigger_percent` is 0.75, but `set_gc_trigger_percent` lets you
 /// configure it yourself. Only values 0 or greater are allowed.
-/// (NaNs and negative values will cause a panic.)
+///
+/// # Panics
+/// This function will panic if you provide a negative or NaN value.
 ///
 /// # Example
 /// ```

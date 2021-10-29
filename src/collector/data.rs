@@ -48,7 +48,8 @@ pub enum UnderlyingData {
 }
 
 impl UnderlyingData {
-    // Safe only if called when the data is known to be live
+    // Safe only if called when the data is known to be live, and you know atomics can't be modified
+    // (Basically only okay to call in the collector itself)
     #[inline]
     pub unsafe fn with_data<F: FnOnce(&GcData)>(&self, f: F) {
         match self {

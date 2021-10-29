@@ -4,6 +4,7 @@ mod data;
 mod dropper;
 mod trigger;
 
+use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::spawn;
@@ -84,6 +85,12 @@ struct TrackedData {
     handles: ChunkedLinkedList<GcHandle>,
 }
 
+#[derive(Debug)]
+#[must_use]
+struct TrackingSetupToken {
+    data_to_track: Arc<GcData>,
+}
+
 // TODO(issue): https://github.com/Others/shredder/issues/7
 
 impl Collector {
@@ -139,12 +146,12 @@ impl Collector {
 
     pub fn track_with_drop<T: Scan + GcDrop>(&self, data: T) -> (InternalGcRef, *const T) {
         let (gc_data_ptr, heap_ptr) = GcAllocation::allocate_with_drop(data);
-        self.track(gc_data_ptr, heap_ptr)
+        (self.track(gc_data_ptr), heap_ptr)
     }
 
     pub fn track_with_no_drop<T: Scan>(&self, data: T) -> (InternalGcRef, *const T) {
         let (gc_data_ptr, heap_ptr) = GcAllocation::allocate_no_drop(data);
-        self.track(gc_data_ptr, heap_ptr)
+        (self.track(gc_data_ptr), heap_ptr)
     }
 
     pub fn track_with_finalization<T: Finalize + Scan>(
@@ -152,7 +159,7 @@ impl Collector {
         data: T,
     ) -> (InternalGcRef, *const T) {
         let (gc_data_ptr, heap_ptr) = GcAllocation::allocate_with_finalization(data);
-        self.track(gc_data_ptr, heap_ptr)
+        (self.track(gc_data_ptr), heap_ptr)
     }
 
     pub fn track_boxed_value<T: Scan + ToScan + GcDrop + ?Sized>(
@@ -160,14 +167,45 @@ impl Collector {
         data: Box<T>,
     ) -> (InternalGcRef, *const T) {
         let (gc_data_ptr, heap_ptr) = GcAllocation::from_box(data);
-        self.track(gc_data_ptr, heap_ptr)
+        (self.track(gc_data_ptr), heap_ptr)
     }
 
-    fn track<T: Scan + ?Sized>(
+    pub unsafe fn track_with_initializer<T, F>(&self, init_function: F) -> (InternalGcRef, *const T)
+    where
+        T: Scan + GcDrop,
+        F: FnOnce(InternalGcRef, *const T) -> T,
+    {
+        let (gc_data_ptr, uninit_ptr) = GcAllocation::allocate_uninitialized_with_drop();
+        let (token, reference) = self.setup_gc_reference(gc_data_ptr);
+
+        let t = init_function(self.clone_handle(&reference), uninit_ptr);
+        ptr::write(uninit_ptr as *mut T, t);
+        let init_ptr = uninit_ptr;
+
+        self.track_from_token(token);
+        (reference, init_ptr)
+    }
+
+    pub unsafe fn track_with_initializer_and_finalize<T, F>(
         &self,
-        gc_data_ptr: GcAllocation,
-        heap_ptr: *const T,
-    ) -> (InternalGcRef, *const T) {
+        init_function: F,
+    ) -> (InternalGcRef, *const T)
+    where
+        T: Finalize + Scan,
+        F: FnOnce(InternalGcRef, *const T) -> T,
+    {
+        let (gc_data_ptr, uninit_ptr) = GcAllocation::allocate_uninitialized_with_finalization();
+        let (token, reference) = self.setup_gc_reference(gc_data_ptr);
+
+        let t = init_function(self.clone_handle(&reference), uninit_ptr);
+        ptr::write(uninit_ptr as *mut T, t);
+        let init_ptr = uninit_ptr;
+
+        self.track_from_token(token);
+        (reference, init_ptr)
+    }
+
+    fn setup_gc_reference(&self, gc_data_ptr: GcAllocation) -> (TrackingSetupToken, InternalGcRef) {
         let new_data_arc = Arc::new(GcData {
             underlying_allocation: gc_data_ptr,
             lockout: Lockout::new(),
@@ -183,14 +221,25 @@ impl Collector {
         // Insert handle before data -- don't want the data to be observable before there is a relevant handle
         let new_handle = self.tracked_data.handles.insert(new_handle_arc);
 
-        self.tracked_data.data.insert(new_data_arc);
+        (
+            TrackingSetupToken {
+                data_to_track: new_data_arc,
+            },
+            InternalGcRef::new(new_handle),
+        )
+    }
 
-        let res = (InternalGcRef::new(new_handle), heap_ptr);
+    fn track_from_token(&self, token: TrackingSetupToken) {
+        self.tracked_data.data.insert(token.data_to_track);
 
         // When we allocate, the heuristic for whether we need to GC might change
         self.notify_async_gc_thread();
+    }
 
-        res
+    fn track(&self, gc_data_ptr: GcAllocation) -> InternalGcRef {
+        let (tracking_token, reference) = self.setup_gc_reference(gc_data_ptr);
+        self.track_from_token(tracking_token);
+        reference
     }
 
     pub fn drop_handle(&self, handle: &InternalGcRef) {
