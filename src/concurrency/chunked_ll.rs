@@ -1,4 +1,3 @@
-use std::mem::{self, MaybeUninit};
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -236,14 +235,5 @@ impl<T> ChunkedLinkedList<T> {
 }
 
 fn initialize_values<T>() -> [ArcSwapOption<T>; CHUNK_SIZE] {
-    unsafe {
-        let mut data: [MaybeUninit<ArcSwapOption<T>>; CHUNK_SIZE] =
-            MaybeUninit::uninit().assume_init();
-
-        for elem in &mut data[..] {
-            ptr::write(elem.as_mut_ptr(), ArcSwapOption::new(None));
-        }
-
-        mem::transmute(data)
-    }
+    [(); CHUNK_SIZE].map(|_| ArcSwapOption::new(None))
 }
