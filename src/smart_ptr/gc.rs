@@ -5,10 +5,10 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
-use std::sync;
 use std::sync::atomic;
 #[cfg(feature = "nightly-features")]
 use std::{marker::Unsize, ops::CoerceUnsized};
+use std::{ptr, sync};
 
 use stable_deref_trait::StableDeref;
 
@@ -216,6 +216,14 @@ impl<T: Scan + ?Sized> Gc<T> {
             gc_ptr: self,
             _warrant: warrant,
         }
+    }
+
+    /// `ptr_eq` lets you compare two `Gc`s for pointer equality.
+    ///
+    /// This has the same semantics as `ptr::eq` or `Arc::ptr_eq`.
+    #[must_use]
+    pub fn ptr_eq(&self, o: &Self) -> bool {
+        ptr::eq(self.direct_ptr, o.direct_ptr)
     }
 
     pub(crate) fn assert_live(&self) {
@@ -622,5 +630,22 @@ mod test {
         let _: Gc<RefCell<dyn NoSize>>;
         let _: Gc<Mutex<dyn NoSize>>;
         let _: Gc<RwLock<dyn NoSize>>;
+    }
+
+    #[test]
+    #[allow(clippy::eq_op)]
+    fn test_eq() {
+        let a = Gc::new(1);
+        let b = Gc::new(1);
+        assert_eq!(a, a);
+        assert_eq!(b, b);
+        assert_eq!(a, b);
+        assert_eq!(b, a);
+
+        assert!(a.ptr_eq(&a));
+        assert!(b.ptr_eq(&b));
+        assert!(!a.ptr_eq(&b));
+        assert!(!b.ptr_eq(&a));
+        assert!(a.ptr_eq(&a.clone()));
     }
 }

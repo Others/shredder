@@ -7,10 +7,10 @@ use crate::{Finalize, Scan, Scanner, ToScan};
 
 use std::any::{Any, TypeId};
 use std::cmp::Ordering;
-use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
+use std::{fmt, ptr};
 
 /// A `Gc`, but with the ability to `Deref` to its contents!
 ///
@@ -92,6 +92,14 @@ impl<T: Scan + GcDeref + ?Sized> DerefGc<T> {
             backing_handle: handle,
             direct_ptr: ptr,
         }
+    }
+
+    /// `ptr_eq` lets you compare two `DerefGc`s for pointer equality.
+    ///
+    /// This has the same semantics as `ptr::eq` or `Arc::ptr_eq`.
+    #[must_use]
+    pub fn ptr_eq(&self, o: &Self) -> bool {
+        ptr::eq(self.direct_ptr, o.direct_ptr)
     }
 }
 
@@ -279,5 +287,27 @@ where
     #[must_use]
     fn ge(&self, other: &Self) -> bool {
         (self.deref()).ge(other.deref())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::DerefGc;
+
+    #[test]
+    #[allow(clippy::eq_op)]
+    fn test_eq() {
+        let a = DerefGc::new(1);
+        let b = DerefGc::new(1);
+        assert_eq!(a, a);
+        assert_eq!(b, b);
+        assert_eq!(a, b);
+        assert_eq!(b, a);
+
+        assert!(a.ptr_eq(&a));
+        assert!(b.ptr_eq(&b));
+        assert!(!a.ptr_eq(&b));
+        assert!(!b.ptr_eq(&a));
+        assert!(a.ptr_eq(&a.clone()));
     }
 }
