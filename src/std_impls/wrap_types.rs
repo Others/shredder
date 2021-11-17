@@ -1,8 +1,8 @@
-use crate::marker::{GcDeref, GcDrop, GcSafe};
-use crate::{Finalize, Scan, Scanner};
-
 use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex, RwLock, TryLockError};
+
+use crate::marker::{GcDeref, GcDrop, GcSafe};
+use crate::{Finalize, Scan, Scanner};
 
 // ARC
 unsafe impl<T: ?Sized> GcDeref for Arc<T> where T: GcDeref + Send {}

@@ -1,12 +1,13 @@
-use crate::marker::{GcDeref, GcDrop, GcSafe};
-use crate::{Finalize, Scan, Scanner};
 // all 7 types in `std::collections` have been implemented
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::BuildHasher;
 use std::mem::forget;
 use std::ptr::read;
 
-// For pretty much all simple collections, the collection inherets the properites of what it contains
+use crate::marker::{GcDeref, GcDrop, GcSafe};
+use crate::{Finalize, Scan, Scanner};
+
+// For pretty much all simple collections, the collection inherits the properties of what it contains
 // (with respect to GcDeref, GcDrop and GcSafe)
 
 // HASHMAP

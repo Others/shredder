@@ -1,16 +1,16 @@
 #[cfg(feature = "nightly-features")]
 use std::{marker::Unsize, ops::CoerceUnsized};
 
-use crate::collector::{InternalGcRef, COLLECTOR};
-use crate::marker::{GcDeref, GcDrop, GcSafe};
-use crate::{Finalize, Scan, Scanner, ToScan};
-
 use std::any::{Any, TypeId};
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::{fmt, ptr};
+
+use crate::collector::{InternalGcRef, COLLECTOR};
+use crate::marker::{GcDeref, GcDrop, GcSafe};
+use crate::{Finalize, Scan, Scanner, ToScan};
 
 /// A `Gc`, but with the ability to `Deref` to its contents!
 ///
