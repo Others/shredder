@@ -19,7 +19,7 @@ mod test {
     unsafe impl GcSafe for MockGc {}
     unsafe impl Scan for MockGc {
         fn scan(&self, scanner: &mut Scanner<'_>) {
-            (scanner.scan_callback)(self.handle.clone());
+            (scanner.scan_callback)(&self.handle);
         }
     }
 

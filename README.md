@@ -26,7 +26,6 @@ of the data has unpredictable cycles in it. (So Arc would not be appropriate.)
 - guarded access: accessing `Gc` data requires acquiring a guard (although you can use `DerefGc` in many cases to avoid this)
 - multiple collectors: only a single global collector is supported
 - can't handle `Rc`/`Arc`: requires all `Gc` objects have straightforward ownership semantics
-- collection optimized for speed, not memory use: `Gc` and internal metadata is small, but there is bloat during collection (will fix!)
 - no no-std support: The collector requires threading and other `std` features (will fix!)
 
 Getting Started

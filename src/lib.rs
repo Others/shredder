@@ -19,7 +19,6 @@
 //! - guarded access: accessing `Gc` data requires acquiring a guard (although you can use `DerefGc` in many cases to avoid this)
 //! - multiple collectors: only a single global collector is supported
 //! - can't handle `Rc`/`Arc`: requires all `Gc` objects have straightforward ownership semantics
-//! - collection optimized for speed, not memory use: `Gc` and internal metadata is small, but there is bloat during collection (will fix!)
 //! - no no-std support: The collector requires threading and other `std` features (will fix!)
 
 #![cfg_attr(feature = "nightly-features", feature(unsize, coerce_unsized))]
@@ -34,6 +33,7 @@
     clippy::redundant_clone,
     clippy::use_self,
     rust_2018_idioms
+    // TODO: Enable `unreachable_pub`
 )]
 // But I don't care about these ones
 #![allow(
@@ -42,7 +42,7 @@
     clippy::explicit_deref_methods,  // Sometimes calling `deref` directly is clearer
     clippy::module_name_repetitions, // Sometimes clear naming calls for repetition
     clippy::multiple_crate_versions, // There is no way to easily fix this without modifying our dependencies
-    proc_macro_back_compat           // Hide this error until we have a path forward. FIXME: issue
+    proc_macro_back_compat           // Hide this error until we have a path forward. TODO: issue
 )]
 
 #[macro_use]

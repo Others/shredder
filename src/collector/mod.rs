@@ -2,10 +2,11 @@ mod alloc;
 mod collect_impl;
 mod data;
 mod dropper;
+mod ref_cnt;
 mod trigger;
 
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::spawn;
 
@@ -17,35 +18,82 @@ use crate::collector::alloc::GcAllocation;
 use crate::collector::dropper::{BackgroundDropper, DropMessage};
 use crate::collector::trigger::GcTrigger;
 use crate::concurrency::atomic_protection::{APSInclusiveGuard, AtomicProtectingSpinlock};
-use crate::concurrency::chunked_ll::{CLLItem, ChunkedLinkedList};
-use crate::concurrency::lockout::{ExclusiveWarrant, Lockout, Warrant};
+use crate::concurrency::chunked_ll::ChunkedLinkedList;
+use crate::concurrency::lockout::{Lockout, Warrant};
 use crate::marker::GcDrop;
 use crate::{Finalize, Scan, ToScan};
 
-pub use crate::collector::data::{GcData, GcHandle, UnderlyingData};
+pub use crate::collector::data::GcData;
+use crate::collector::ref_cnt::GcRefCount;
 
-/// Intermediate struct. `Gc<T>` holds a `InternalGcRef`, which references a `GcHandle`
-/// There should be one `GcHandle` per `Gc<T>`
-#[derive(Clone, Debug)]
+/// Intermediate struct. `Gc<T>` holds a `InternalGcRef`, which owns incrementing and decrementing
+/// the reference count of the stored data.
+#[derive(Debug)]
 pub struct InternalGcRef {
-    handle_ref: CLLItem<GcHandle>,
+    data_ref: Arc<GcData>,
+    invalidated: AtomicBool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum RefCountPolicy {
+    // A transient handle doesn't increment or decrement the reference count
+    TransientHandle,
+    // On initial creation, we assume the reference count is exactly one, and only increment the handle count
+    // Then on deallocation, we decrement both the data and handle count
+    InitialCreation,
+    // If a handle already exists, we manage both the data reference and handle counts
+    FromExistingHandle,
+    // The reference counts are being inherited from another source (used mostly by `AtomicGc`)
+    InheritExistingCounts,
 }
 
 impl InternalGcRef {
-    pub(crate) fn new(handle_ref: CLLItem<GcHandle>) -> Self {
-        Self { handle_ref }
+    #[inline]
+    #[allow(clippy::match_same_arms)]
+    pub(crate) fn new(data_ref: Arc<GcData>, ref_cnt_policy: RefCountPolicy) -> Self {
+        match &ref_cnt_policy {
+            RefCountPolicy::TransientHandle => {
+                // No action: this is a transient handle
+            }
+            RefCountPolicy::InheritExistingCounts => {
+                // No action: we are inheriting the reference counts from another source
+            }
+            RefCountPolicy::InitialCreation => {
+                debug_assert_eq!(data_ref.ref_cnt.snapshot_ref_count(), 1);
+                // Increment handle count only
+                COLLECTOR.increment_handle_count();
+            }
+            RefCountPolicy::FromExistingHandle => {
+                COLLECTOR.increment_reference_count(&data_ref);
+            }
+        }
+
+        let pre_invalidated = matches!(ref_cnt_policy, RefCountPolicy::TransientHandle);
+
+        Self {
+            data_ref,
+            invalidated: AtomicBool::new(pre_invalidated),
+        }
     }
 
+    #[inline]
     pub(crate) fn invalidate(&self) {
         COLLECTOR.drop_handle(self);
     }
 
+    #[inline]
+    pub(crate) fn is_invalidated(&self) -> bool {
+        self.invalidated.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub(crate) fn invalidate_without_touching_reference_counts(&self) {
+        self.invalidated.store(true, Ordering::Relaxed);
+    }
+
+    #[inline]
     pub(crate) fn data(&self) -> &Arc<GcData> {
-        if let UnderlyingData::Fixed(data) = &self.handle_ref.v.underlying_data {
-            data
-        } else {
-            panic!("Only fixed data has a usable `data` method")
-        }
+        &self.data_ref
     }
 }
 
@@ -55,7 +103,6 @@ pub struct GcGuardWarrant {
     /// stores the internal warrant. only the drop being run is relevant
     _warrant: Warrant<Arc<GcData>>,
 }
-type GcExclusiveWarrant = ExclusiveWarrant<Arc<GcData>>;
 
 pub struct Collector {
     /// shredder only allows one collection to proceed at a time
@@ -70,25 +117,10 @@ pub struct Collector {
     /// sending to this channel indicates that thread should check the trigger, then collect if the
     /// trigger indicates it should
     async_gc_notifier: Sender<()>,
-    /// all the data we are managing plus metadata about what `Gc<T>`s exist
-    tracked_data: TrackedData,
-}
-
-/// Stores metadata about each piece of tracked data, plus metadata about each handle
-#[derive(Debug)]
-struct TrackedData {
-    /// we increment this whenever we collect
-    current_collection_number: AtomicU64,
     /// a set storing metadata on the live data the collector is managing
-    data: ChunkedLinkedList<GcData>,
-    /// a set storing metadata on each live handle (`Gc<T>`) the collector is managing
-    handles: ChunkedLinkedList<GcHandle>,
-}
-
-#[derive(Debug)]
-#[must_use]
-struct TrackingSetupToken {
-    data_to_track: Arc<GcData>,
+    tracked_data: ChunkedLinkedList<GcData>,
+    /// a count of how many handles are live
+    live_handle_count: AtomicUsize,
 }
 
 // TODO(issue): https://github.com/Others/shredder/issues/7
@@ -103,17 +135,8 @@ impl Collector {
             trigger: GcTrigger::default(),
             dropper: BackgroundDropper::new(),
             async_gc_notifier,
-            tracked_data: TrackedData {
-                // This is janky, but we subtract one from the collection number
-                // to get a previous collection number in `do_collect`
-                //
-                // We also use 0 as a sentinel value for newly allocated data
-                //
-                // Together that implies we need to start the collection number sequence at 2, not 1
-                current_collection_number: AtomicU64::new(2),
-                data: ChunkedLinkedList::new(),
-                handles: ChunkedLinkedList::new(),
-            },
+            tracked_data: ChunkedLinkedList::new(),
+            live_handle_count: AtomicUsize::new(0),
         });
 
         // The async Gc thread deals with background Gc'ing
@@ -175,15 +198,8 @@ impl Collector {
         T: Scan + GcDrop,
         F: FnOnce(InternalGcRef, *const T) -> T,
     {
-        let (gc_data_ptr, uninit_ptr) = GcAllocation::allocate_uninitialized_with_drop();
-        let (token, reference) = self.setup_gc_reference(gc_data_ptr);
-
-        let t = init_function(self.clone_handle(&reference), uninit_ptr);
-        ptr::write(uninit_ptr as *mut T, t);
-        let init_ptr = uninit_ptr;
-
-        self.track_from_token(token);
-        (reference, init_ptr)
+        let (gc_allocation, uninit_ptr) = GcAllocation::allocate_uninitialized_with_drop();
+        self.initialize_and_track(init_function, gc_allocation, uninit_ptr)
     }
 
     pub unsafe fn track_with_initializer_and_finalize<T, F>(
@@ -194,125 +210,115 @@ impl Collector {
         T: Finalize + Scan,
         F: FnOnce(InternalGcRef, *const T) -> T,
     {
-        let (gc_data_ptr, uninit_ptr) = GcAllocation::allocate_uninitialized_with_finalization();
-        let (token, reference) = self.setup_gc_reference(gc_data_ptr);
-
-        let t = init_function(self.clone_handle(&reference), uninit_ptr);
-        ptr::write(uninit_ptr as *mut T, t);
-        let init_ptr = uninit_ptr;
-
-        self.track_from_token(token);
-        (reference, init_ptr)
+        let (gc_allocation, uninit_ptr) = GcAllocation::allocate_uninitialized_with_finalization();
+        self.initialize_and_track(init_function, gc_allocation, uninit_ptr)
     }
 
-    fn setup_gc_reference(&self, gc_data_ptr: GcAllocation) -> (TrackingSetupToken, InternalGcRef) {
-        let new_data_arc = Arc::new(GcData {
-            underlying_allocation: gc_data_ptr,
+    unsafe fn initialize_and_track<T, F>(
+        &self,
+        init_function: F,
+        gc_allocation: GcAllocation,
+        uninit_ptr: *const T,
+    ) -> (InternalGcRef, *const T)
+    where
+        T: Scan,
+        F: FnOnce(InternalGcRef, *const T) -> T,
+    {
+        let gc_data = Arc::new(GcData {
+            underlying_allocation: gc_allocation,
             lockout: Lockout::new(),
             deallocated: AtomicBool::new(false),
-            last_marked: AtomicU64::new(0),
+            // Must start count at 1 to avoid a race condition between inserting the data and creating the handle
+            ref_cnt: GcRefCount::new(1),
         });
 
-        let new_handle_arc = Arc::new(GcHandle {
-            underlying_data: UnderlyingData::Fixed(new_data_arc.clone()),
-            last_non_rooted: AtomicU64::new(0),
-        });
+        // Take a warrant to prevent the collector from accessing the data while we're initializing it
+        let warrant = Lockout::try_take_exclusive_warrant(gc_data.clone())
+            .expect("lockout just created, so should be avaliable for locking");
 
-        // Insert handle before data -- don't want the data to be observable before there is a relevant handle
-        let new_handle = self.tracked_data.handles.insert(new_handle_arc);
+        // Setup our data structures to handle this data
+        let gc_handle = self.tracked_data.insert(gc_data);
+        let reference = InternalGcRef::new(gc_handle.v, RefCountPolicy::InitialCreation);
 
-        (
-            TrackingSetupToken {
-                data_to_track: new_data_arc,
-            },
-            InternalGcRef::new(new_handle),
-        )
-    }
+        // Initialize
+        let t = init_function(self.clone_handle(&reference), uninit_ptr);
+        ptr::write(uninit_ptr as *mut T, t);
 
-    fn track_from_token(&self, token: TrackingSetupToken) {
-        self.tracked_data.data.insert(token.data_to_track);
+        // We've written the data, so drop the warrant
+        drop(warrant);
 
         // When we allocate, the heuristic for whether we need to GC might change
         self.notify_async_gc_thread();
+
+        (reference, uninit_ptr)
     }
 
     fn track(&self, gc_data_ptr: GcAllocation) -> InternalGcRef {
-        let (tracking_token, reference) = self.setup_gc_reference(gc_data_ptr);
-        self.track_from_token(tracking_token);
-        reference
+        let item = self.tracked_data.insert(Arc::new(GcData {
+            underlying_allocation: gc_data_ptr,
+            lockout: Lockout::new(),
+            deallocated: AtomicBool::new(false),
+            // Start the reference count at 1 to avoid a race condition between insertion and handle creation
+            ref_cnt: GcRefCount::new(1),
+        }));
+        let res = InternalGcRef::new(item.v, RefCountPolicy::InitialCreation);
+
+        // When we allocate, the heuristic for whether we need to GC might change
+        self.notify_async_gc_thread();
+
+        res
     }
 
     pub fn drop_handle(&self, handle: &InternalGcRef) {
-        self.tracked_data.handles.remove(&handle.handle_ref);
+        let was_invalidated = handle.invalidated.swap(true, Ordering::Relaxed);
+        if !was_invalidated {
+            self.decrement_reference_count(&handle.data_ref);
+        }
 
         // NOTE: This is worth experimenting with
         // self.notify_async_gc_thread();
     }
 
+    #[allow(clippy::unused_self)]
     pub fn clone_handle(&self, handle: &InternalGcRef) -> InternalGcRef {
-        let new_handle_arc = Arc::new(GcHandle {
-            underlying_data: UnderlyingData::Fixed(handle.data().clone()),
-            last_non_rooted: AtomicU64::new(0),
-        });
-
-        let new_handle = self.tracked_data.handles.insert(new_handle_arc);
-
-        InternalGcRef {
-            handle_ref: new_handle,
-        }
+        InternalGcRef::new(handle.data_ref.clone(), RefCountPolicy::FromExistingHandle)
     }
 
-    pub fn handle_from_data(&self, underlying_data: Arc<GcData>) -> InternalGcRef {
-        let new_handle_arc = Arc::new(GcHandle {
-            underlying_data: UnderlyingData::Fixed(underlying_data),
-            last_non_rooted: AtomicU64::new(0),
-        });
-
-        let new_handle = self.tracked_data.handles.insert(new_handle_arc);
-
-        InternalGcRef {
-            handle_ref: new_handle,
-        }
+    pub fn increment_handle_count(&self) {
+        self.live_handle_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub fn new_handle_for_atomic(&self, atomic_ptr: Arc<AtomicPtr<GcData>>) -> InternalGcRef {
-        let new_handle_arc = Arc::new(GcHandle {
-            underlying_data: UnderlyingData::DynamicForAtomic(atomic_ptr),
-            last_non_rooted: AtomicU64::new(0),
-        });
-
-        let new_handle = self.tracked_data.handles.insert(new_handle_arc);
-
-        InternalGcRef {
-            handle_ref: new_handle,
-        }
+    pub fn increment_reference_count(&self, data: &GcData) {
+        data.ref_cnt.inc_count();
+        self.live_handle_count.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn decrement_reference_count(&self, data: &GcData) {
+        data.ref_cnt.dec_count();
+        // NOTE: This will wrap around on overflow
+        self.live_handle_count.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    // TODO: Fix the abstraction layer between `InternalGcRef` and `Collector`
     #[allow(clippy::unused_self)]
     pub fn get_data_warrant(&self, handle: &InternalGcRef) -> GcGuardWarrant {
-        // This check is only necessary in the destructors
-        // The destructor thread will always set the `deallocated` flag before deallocating data
-        if let UnderlyingData::Fixed(fixed) = &handle.handle_ref.v.underlying_data {
-            let data_deallocated = fixed.deallocated.load(Ordering::SeqCst);
+        let data_deallocated = handle.data_ref.deallocated.load(Ordering::SeqCst);
 
-            if data_deallocated {
-                panic!("Tried to access into a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
-            }
+        if data_deallocated {
+            panic!("Tried to access into a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
+        }
 
-            GcGuardWarrant {
-                _warrant: Lockout::get_warrant(fixed.clone()),
-            }
-        } else {
-            panic!("Cannot get data warrant for atomic data!")
+        GcGuardWarrant {
+            _warrant: Lockout::take_warrant(handle.data_ref.clone()),
         }
     }
 
     pub fn tracked_data_count(&self) -> usize {
-        self.tracked_data.data.estimate_len()
+        self.tracked_data.estimate_len()
     }
 
     pub fn handle_count(&self) -> usize {
-        self.tracked_data.handles.estimate_len()
+        self.live_handle_count.load(Ordering::Relaxed)
     }
 
     pub fn set_gc_trigger_percent(&self, new_trigger_percent: f32) {
@@ -348,8 +354,8 @@ impl Collector {
     pub fn check_then_collect(&self) -> bool {
         let gc_guard = self.gc_lock.lock();
 
-        let current_data_count = self.tracked_data.data.estimate_len();
-        let current_handle_count = self.tracked_data.handles.estimate_len();
+        let current_data_count = self.tracked_data.estimate_len();
+        let current_handle_count = self.live_handle_count.load(Ordering::Relaxed);
         if self
             .trigger
             .should_collect(current_data_count, current_handle_count)
@@ -382,19 +388,12 @@ pub(crate) fn get_mock_handle() -> InternalGcRef {
 
     let mock_scannable: Box<dyn Scan> = Box::new(MockAllocation);
 
-    // This leaks some memory...
-    let mock_master_list = ChunkedLinkedList::new();
-
-    // Note: Here we assume a random u64 is unique. That's hacky, but is fine for testing :)
-    let handle_arc = Arc::new(GcHandle {
-        underlying_data: UnderlyingData::Fixed(Arc::new(GcData {
-            underlying_allocation: unsafe { GcAllocation::raw(Box::into_raw(mock_scannable)) },
-            lockout: Lockout::new(),
-            deallocated: AtomicBool::new(false),
-            last_marked: AtomicU64::new(0),
-        })),
-        last_non_rooted: AtomicU64::new(0),
+    let data_arc = Arc::new(GcData {
+        underlying_allocation: unsafe { GcAllocation::raw(&*mock_scannable) },
+        lockout: Lockout::new(),
+        deallocated: AtomicBool::new(false),
+        ref_cnt: GcRefCount::new(1),
     });
 
-    InternalGcRef::new(mock_master_list.insert(handle_arc))
+    InternalGcRef::new(data_arc, RefCountPolicy::InitialCreation)
 }

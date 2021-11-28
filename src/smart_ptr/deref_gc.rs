@@ -145,7 +145,7 @@ unsafe impl<T: Scan + GcDeref + ?Sized> Scan for DerefGc<T> {
     #[allow(clippy::inline_always)]
     #[inline(always)]
     fn scan(&self, scanner: &mut Scanner<'_>) {
-        scanner.add_internal_handle(self.backing_handle.clone());
+        scanner.add_internal_handle(&self.backing_handle);
     }
 }
 
@@ -291,11 +291,11 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::eq_op)]
 mod test {
     use crate::DerefGc;
 
     #[test]
-    #[allow(clippy::eq_op)]
     fn test_eq() {
         let a = DerefGc::new(1);
         let b = DerefGc::new(1);

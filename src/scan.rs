@@ -111,13 +111,12 @@ unsafe impl<T: Scan + Sized + 'static> ToScan for T {
 /// Scanner is a struct used to manage the scanning of data, sort of analogous to `Hasher`
 /// Usually you will only care about this while implementing `Scan`
 pub struct Scanner<'a> {
-    pub(crate) scan_callback: Box<dyn FnMut(InternalGcRef) + 'a>,
+    pub(crate) scan_callback: Box<dyn FnMut(&InternalGcRef) + 'a>,
 }
 
-#[allow(clippy::unused_self)]
 impl<'a> Scanner<'a> {
     #[must_use]
-    pub(crate) fn new<F: FnMut(InternalGcRef) + 'a>(callback: F) -> Self {
+    pub(crate) fn new<F: FnMut(&InternalGcRef) + 'a>(callback: F) -> Self {
         Self {
             scan_callback: Box::new(callback),
         }
@@ -130,7 +129,7 @@ impl<'a> Scanner<'a> {
     }
 
     #[inline]
-    pub(crate) fn add_internal_handle(&mut self, gc_ref: InternalGcRef) {
+    pub(crate) fn add_internal_handle(&mut self, gc_ref: &InternalGcRef) {
         (self.scan_callback)(gc_ref);
     }
 }
