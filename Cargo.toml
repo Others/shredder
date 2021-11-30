@@ -26,14 +26,19 @@ shredder_derive = "0.2.0"
 #shredder_derive = { path = "../shredder_derive" }
 stable_deref_trait = "1.2"
 
-[dev-dependencies]
-paste = "1.0"
-rand = "0.8.3"
-trybuild = "1.0"
-
 #[profile.release]
 #debug = true
 
 [features]
 default = []
 nightly-features = []
+
+[dev-dependencies]
+criterion = "0.3"
+paste = "1.0"
+rand = "0.8.3"
+trybuild = "1.0"
+
+[[bench]]
+name = "shredder_benchmark"
+harness = false

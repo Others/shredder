@@ -42,6 +42,7 @@
     clippy::explicit_deref_methods,  // Sometimes calling `deref` directly is clearer
     clippy::module_name_repetitions, // Sometimes clear naming calls for repetition
     clippy::multiple_crate_versions, // There is no way to easily fix this without modifying our dependencies
+    clippy::missing_safety_doc,      // FIXME: Add safety documentation
     proc_macro_back_compat           // Hide this error until we have a path forward. FIXME: issue
 )]
 

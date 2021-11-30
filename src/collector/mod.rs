@@ -295,9 +295,7 @@ impl Collector {
         if let UnderlyingData::Fixed(fixed) = &handle.handle_ref.v.underlying_data {
             let data_deallocated = fixed.deallocated.load(Ordering::SeqCst);
 
-            if data_deallocated {
-                panic!("Tried to access into a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
-            }
+            assert!(!data_deallocated, "Tried to access into a Gc, but the internal state was corrupted (perhaps you're manipulating Gc<?> in a destructor?)");
 
             GcGuardWarrant {
                 _warrant: Lockout::get_warrant(fixed.clone()),
