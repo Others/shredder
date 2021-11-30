@@ -203,7 +203,7 @@ impl GcAllocation {
         }
     }
 
-    pub fn scan<F: FnMut(InternalGcRef)>(&self, callback: F) {
+    pub fn scan<F: FnMut(&InternalGcRef)>(&self, callback: F) {
         unsafe {
             let mut scanner = Scanner::new(callback);
             let to_scan = &*self.scan_ptr;

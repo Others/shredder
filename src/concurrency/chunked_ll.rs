@@ -48,14 +48,9 @@ impl<T> Chunk<T> {
         if self.next.is_null() {
             self.iter_this(f);
         } else {
-            rayon::join(
-                || self.iter_this(f),
-                || {
-                    let next = unsafe { &*self.next };
+            let next = unsafe { &*self.next };
 
-                    next.par_iter_rest(f)
-                },
-            );
+            rayon::join(|| self.iter_this(f), || next.par_iter_rest(f));
         }
     }
 
@@ -197,6 +192,7 @@ impl<T> ChunkedLinkedList<T> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn remove(&self, cll_item: &CLLItem<T>) {
         let chunk = unsafe { &*cll_item.from };
 

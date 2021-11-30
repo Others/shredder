@@ -1,8 +1,8 @@
 /// A marker trait that the destructor of this data can be safely run in the background thread
 ///
 /// Basically it asserts three things
-/// 1) Any thread can drop this data (It is `Send`, or `!Send` purely because it contains a `Gc`, or
-/// it is `!Send` but you know that any thread dropping this data is safe.)
+/// 1) Any thread can drop this data (It is `Send`, or `!Send` purely because it contains a `!Send`
+/// `Gc<X>`, or it is `!Send` but you know that any thread dropping this data is safe.)
 /// 2) This data does not own a `AtomicGc` or `DerefGc`
 /// 3) This data is `'static`, or you can guarantee that it's safe to drop it after its lifetime
 /// has ended.

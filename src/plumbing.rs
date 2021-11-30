@@ -15,7 +15,7 @@ pub fn check_gc_drop<T: GcDrop>(_: &T) {}
 #[inline(always)]
 pub fn check_gc_safe<T: GcSafe>(_: &T) {}
 
-// FIXME: This macro can be removed once we have overlapping marker traits
+// TODO: This macro can be removed once we have overlapping marker traits
 //        (https://github.com/rust-lang/rust/issues/29864)
 /// A `Send + 'static` type can be safely marked as `GcSafe`, and this macro eases that
 /// implementation

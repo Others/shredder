@@ -132,7 +132,7 @@ impl<T: Scan + ?Sized> Gc<T> {
 
                 // Create a Gc<T>
                 let gc = Self {
-                    backing_handle: gc_ref.clone(),
+                    backing_handle: COLLECTOR.clone_handle(&gc_ref),
                     direct_ptr: uninit_ptr,
                 };
 
@@ -160,7 +160,7 @@ impl<T: Scan + ?Sized> Gc<T> {
     /// See `new_cyclic` and `new_with_finalizer`
     pub fn new_cyclic_with_finalizer<F>(f: F) -> Self
     where
-        T: Sized + Finalize, // FIXME: Add a `GcDrop` variant
+        T: Sized + Finalize,
         F: FnOnce(Self) -> T,
     {
         let (handle, ptr) = unsafe {
@@ -173,7 +173,7 @@ impl<T: Scan + ?Sized> Gc<T> {
 
                 // Create a Gc<T>
                 let gc = Self {
-                    backing_handle: gc_ref.clone(),
+                    backing_handle: COLLECTOR.clone_handle(&gc_ref),
                     direct_ptr: uninit_ptr,
                 };
 
@@ -227,13 +227,21 @@ impl<T: Scan + ?Sized> Gc<T> {
     }
 
     pub(crate) fn assert_live(&self) {
-        let ordering = atomic::Ordering::Relaxed;
-        let is_deallocated = self.backing_handle.data().deallocated.load(ordering);
-        assert!(!is_deallocated);
+        let is_deallocated = self
+            .backing_handle
+            .data()
+            .deallocated
+            .load(atomic::Ordering::Relaxed);
+        let is_invalidated = self.backing_handle.is_invalidated();
+        assert!(!is_deallocated && !is_invalidated);
     }
 
-    pub(crate) fn internal_handle(&self) -> InternalGcRef {
-        self.backing_handle.clone()
+    #[inline]
+    pub(crate) fn drop_preserving_reference_counts(self) {
+        // Ensure the `drop` implementation doesn't touch the reference count
+        self.backing_handle
+            .invalidate_without_touching_reference_counts();
+        drop(self);
     }
 
     pub(crate) fn internal_handle_ref(&self) -> &InternalGcRef {
@@ -286,7 +294,7 @@ unsafe impl<T: Scan + ?Sized> Scan for Gc<T> {
     #[allow(clippy::inline_always)]
     #[inline(always)]
     fn scan(&self, scanner: &mut Scanner<'_>) {
-        scanner.add_internal_handle(self.internal_handle());
+        scanner.add_internal_handle(&self.backing_handle);
     }
 }
 
@@ -317,7 +325,7 @@ impl<T: Scan + ?Sized> Drop for Gc<T> {
 
 unsafe impl<T: Scan + ?Sized> Finalize for Gc<T> {
     unsafe fn finalize(&mut self) {
-        self.internal_handle().invalidate();
+        self.backing_handle.invalidate();
     }
 }
 

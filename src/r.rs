@@ -73,7 +73,7 @@ unsafe impl<'a, T: ?Sized> GcDeref for R<'a, T> where T: GcDeref {}
 
 unsafe impl<'a, T: ?Sized> GcSafe for RMut<'a, T> {}
 // unsafe impl<'a, T: ?Sized> !GcDrop for RMut<'a, T> {}
-// FIXME: Kinda a subtle impl, not sure if it's correct
+// This is counter intuitive, but safe (because you can't get a mutable reference from a &RMut)
 unsafe impl<'a, T: ?Sized> GcDeref for RMut<'a, T> where T: GcDeref {}
 
 unsafe impl<'a, T: ?Sized> Scan for R<'a, T> {
@@ -160,8 +160,6 @@ where
         raw.hash(state);
     }
 }
-
-// TODO: Ord, PartialOrd
 
 impl<'a, T: ?Sized> PartialEq for R<'a, T>
 where

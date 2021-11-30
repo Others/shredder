@@ -130,7 +130,7 @@ fn scan_skip_problem() {
         let root_con = Gc::new(sync::Mutex::new(Connection::default()));
         eprintln!("root {:?}", root_con);
 
-        // FIXME: Use shortcut methods here
+        // TODO: Use shortcut methods here
         let hidden = Gc::new(sync::Mutex::new(Connection::default()));
         eprintln!("hidden {:?}", hidden);
         let hider = Gc::new(sync::Mutex::new(Connection::default()));
@@ -233,16 +233,14 @@ fn simple_atomic_cleanup() {
 
     run_with_gc_cleanup(|| {
         let value = Gc::new(17);
-        let atomic = AtomicGc::new(&value);
-        drop(value);
+        let atomic = AtomicGc::new(value);
 
         let fr = atomic.load(Ordering::Relaxed);
         assert_eq!(*fr.get(), 17);
         drop(fr);
 
         let new_value = Gc::new(20);
-        atomic.store(&new_value, Ordering::Relaxed);
-        drop(new_value);
+        atomic.store(new_value, Ordering::Relaxed);
 
         let sr = atomic.load(Ordering::Relaxed);
         assert_eq!(*sr.get(), 20);
@@ -262,10 +260,8 @@ fn atomic_cycle() {
 
         let b = Gc::new(sync::Mutex::new(Connection { connect: None }));
 
-        let a_atomic = AtomicGc::new(&a);
-        let b_atomic = AtomicGc::new(&b);
-        drop(a);
-        drop(b);
+        let a_atomic = AtomicGc::new(a);
+        let b_atomic = AtomicGc::new(b);
 
         let a_read = a_atomic.load(Ordering::Relaxed);
         let b_read = b_atomic.load(Ordering::Relaxed);
@@ -281,29 +277,6 @@ fn atomic_cycle() {
 }
 
 #[test]
-fn atomic_compare_and_swap_test() {
-    let _guard = TEST_MUTEX.lock();
-    run_with_gc_cleanup(|| {
-        let v1 = Gc::new(123);
-        let v2 = Gc::new(1776);
-        let v1_alt = Gc::new(123);
-
-        let atomic = AtomicGc::new(&v1);
-        assert_eq!(*atomic.load(Ordering::Relaxed).get(), 123);
-
-        let res = atomic.compare_and_swap(&v1, &v2, Ordering::Relaxed);
-        assert!(res);
-        assert_eq!(*atomic.load(Ordering::Relaxed).get(), 1776);
-
-        atomic.store(&v1, Ordering::Relaxed);
-        let res = atomic.compare_and_swap(&v1_alt, &v2, Ordering::Relaxed);
-        assert!(!res);
-        assert_eq!(*atomic.load(Ordering::Relaxed).get(), 123);
-    });
-    assert_eq!(number_of_tracked_allocations(), 0);
-}
-
-#[test]
 fn atomic_compare_and_exchange_test() {
     let _guard = TEST_MUTEX.lock();
     run_with_gc_cleanup(|| {
@@ -311,17 +284,44 @@ fn atomic_compare_and_exchange_test() {
         let v2 = Gc::new(1776);
         let v1_alt = Gc::new(123);
 
-        let atomic = AtomicGc::new(&v1);
+        let atomic = AtomicGc::new(v1.clone());
         assert_eq!(*atomic.load(Ordering::Relaxed).get(), 123);
 
-        let res = atomic.compare_exchange(&v1, &v2, Ordering::Relaxed, Ordering::Relaxed);
-        assert!(res);
+        let res = atomic.compare_exchange(&v1, v2.clone(), Ordering::Relaxed, Ordering::Relaxed);
+        assert!(res.is_ok());
         assert_eq!(*atomic.load(Ordering::Relaxed).get(), 1776);
 
-        atomic.store(&v1, Ordering::Relaxed);
-        let res = atomic.compare_exchange(&v1_alt, &v2, Ordering::Relaxed, Ordering::Relaxed);
-        assert!(!res);
+        atomic.store(v1, Ordering::Relaxed);
+        let res = atomic.compare_exchange(&v1_alt, v2, Ordering::Relaxed, Ordering::Relaxed);
+        assert!(res.is_err());
         assert_eq!(*atomic.load(Ordering::Relaxed).get(), 123);
+    });
+    assert_eq!(number_of_tracked_allocations(), 0);
+    assert_eq!(number_of_active_handles(), 0);
+}
+
+#[test]
+fn atomic_swap_test() {
+    let _guard = TEST_MUTEX.lock();
+    run_with_gc_cleanup(|| {
+        let x1 = Gc::new(76);
+        let x2 = Gc::new(667);
+
+        let atomic = AtomicGc::new(x1.clone());
+        let s1 = atomic.swap(x2.clone(), Ordering::Relaxed);
+
+        assert_eq!(x1, s1);
+        drop(x1);
+        drop(s1);
+        collect();
+        assert_eq!(number_of_tracked_allocations(), 1);
+
+        let s2 = atomic.load(Ordering::Relaxed);
+        assert_eq!(s2, x2);
+        drop(x2);
+
+        collect();
+        assert_eq!(number_of_tracked_allocations(), 1);
     });
     assert_eq!(number_of_tracked_allocations(), 0);
     assert_eq!(number_of_active_handles(), 0);
