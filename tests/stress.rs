@@ -42,6 +42,7 @@ fn stress_test() {
         if i % SHRINK_DIV == 0 {
             nodes.truncate(NODE_COUNT - i);
             collect();
+            // TODO: Add an assert here
             println!("Now have {} datas", number_of_tracked_allocations());
         }
     }

@@ -28,7 +28,7 @@ struct Chunk<T> {
     next: *const Chunk<T>,
 }
 
-unsafe impl<T> Send for Chunk<T> where T: Send {}
+unsafe impl<T> Send for Chunk<T> where T: Send + Sync {}
 unsafe impl<T> Sync for Chunk<T> where T: Sync {}
 
 impl<T> Chunk<T> {
@@ -106,8 +106,8 @@ pub struct CLLItem<T> {
     idx: usize,
 }
 
-unsafe impl<T> Send for CLLItem<T> {}
-unsafe impl<T> Sync for CLLItem<T> {}
+unsafe impl<T> Send for CLLItem<T> where T: Send + Sync {}
+unsafe impl<T> Sync for CLLItem<T> where T: Sync {}
 
 impl<T> Clone for CLLItem<T> {
     fn clone(&self) -> Self {
